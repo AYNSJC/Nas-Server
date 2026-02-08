@@ -11,6 +11,7 @@ import io
 BASE_DIR = Path(__file__).parent
 STORAGE_DIR = BASE_DIR / "nas_storage"
 USERS_FILE = BASE_DIR / "users.json"
+SHARED_FILE = BASE_DIR / "shared_files.json"
 LOG_DIR = BASE_DIR / "logs"
 STATIC_DIR = BASE_DIR / "static"
 
@@ -77,6 +78,165 @@ def validate_path(username, path):
     components = [secure_filename(p) for p in path.split('/') if p and p != '..']
 
     return '/'.join(components)
+
+
+class SharedFilesManager:
+    def __init__(self, shared_file):
+        self.shared_file = shared_file
+        self.load_shared_files()
+
+    def load_shared_files(self):
+        if self.shared_file.exists():
+            try:
+                with open(self.shared_file, 'r', encoding='utf-8') as f:
+                    self.shared_files = json.load(f)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                self.shared_files = {"pending": [], "approved": [], "folders": []}
+                self.save_shared_files()
+        else:
+            self.shared_files = {"pending": [], "approved": [], "folders": []}
+            self.save_shared_files()
+
+    def save_shared_files(self):
+        with open(self.shared_file, 'w', encoding='utf-8') as f:
+            json.dump(self.shared_files, f, indent=2, ensure_ascii=False)
+
+    def request_share(self, username, filepath, filename, file_size, file_type):
+        file_entry = {
+            "id": secrets.token_urlsafe(16),
+            "username": username,
+            "filepath": filepath,
+            "filename": filename,
+            "file_size": file_size,
+            "file_type": file_type,
+            "requested_at": datetime.now().isoformat(),
+            "status": "pending"
+        }
+        self.shared_files["pending"].append(file_entry)
+        self.save_shared_files()
+        return file_entry["id"]
+
+    def request_folder_share(self, username, folder_path, folder_name):
+        folder_entry = {
+            "id": secrets.token_urlsafe(16),
+            "username": username,
+            "folder_path": folder_path,
+            "folder_name": folder_name,
+            "requested_at": datetime.now().isoformat(),
+            "status": "pending"
+        }
+        if "pending_folders" not in self.shared_files:
+            self.shared_files["pending_folders"] = []
+        self.shared_files["pending_folders"].append(folder_entry)
+        self.save_shared_files()
+        return folder_entry["id"]
+
+    def approve_share(self, file_id):
+        for i, entry in enumerate(self.shared_files["pending"]):
+            if entry["id"] == file_id:
+                entry["status"] = "approved"
+                entry["approved_at"] = datetime.now().isoformat()
+                self.shared_files["approved"].append(entry)
+                self.shared_files["pending"].pop(i)
+                self.save_shared_files()
+                return True
+        return False
+
+    def approve_folder_share(self, folder_id):
+        if "pending_folders" not in self.shared_files:
+            self.shared_files["pending_folders"] = []
+        if "folders" not in self.shared_files:
+            self.shared_files["folders"] = []
+
+        for i, entry in enumerate(self.shared_files["pending_folders"]):
+            if entry["id"] == folder_id:
+                entry["status"] = "approved"
+                entry["approved_at"] = datetime.now().isoformat()
+                self.shared_files["folders"].append(entry)
+                self.shared_files["pending_folders"].pop(i)
+                self.save_shared_files()
+                return True
+        return False
+
+    def reject_share(self, file_id):
+        for i, entry in enumerate(self.shared_files["pending"]):
+            if entry["id"] == file_id:
+                self.shared_files["pending"].pop(i)
+                self.save_shared_files()
+                return True
+        return False
+
+    def reject_folder_share(self, folder_id):
+        if "pending_folders" not in self.shared_files:
+            return False
+
+        for i, entry in enumerate(self.shared_files["pending_folders"]):
+            if entry["id"] == folder_id:
+                self.shared_files["pending_folders"].pop(i)
+                self.save_shared_files()
+                return True
+        return False
+
+    def remove_share(self, file_id):
+        for i, entry in enumerate(self.shared_files["approved"]):
+            if entry["id"] == file_id:
+                self.shared_files["approved"].pop(i)
+                self.save_shared_files()
+                return True
+        return False
+
+    def remove_folder_share(self, folder_id):
+        if "folders" not in self.shared_files:
+            return False
+
+        for i, entry in enumerate(self.shared_files["folders"]):
+            if entry["id"] == folder_id:
+                self.shared_files["folders"].pop(i)
+                self.save_shared_files()
+                return True
+        return False
+
+    def get_pending(self):
+        return self.shared_files["pending"]
+
+    def get_pending_folders(self):
+        if "pending_folders" not in self.shared_files:
+            self.shared_files["pending_folders"] = []
+        return self.shared_files["pending_folders"]
+
+    def get_approved(self):
+        return self.shared_files["approved"]
+
+    def get_approved_folders(self):
+        if "folders" not in self.shared_files:
+            self.shared_files["folders"] = []
+        return self.shared_files["folders"]
+
+    def is_file_shared(self, username, filepath):
+        for entry in self.shared_files["approved"]:
+            if entry["username"] == username and entry["filepath"] == filepath:
+                return True
+        return False
+
+    def is_folder_shared(self, username, folder_path):
+        if "folders" not in self.shared_files:
+            return False
+        for entry in self.shared_files["folders"]:
+            if entry["username"] == username and entry["folder_path"] == folder_path:
+                return True
+        return False
+
+    def is_in_shared_folder(self, username, filepath):
+        """Check if a file is within a shared folder"""
+        if "folders" not in self.shared_files:
+            return False
+
+        for folder in self.shared_files["folders"]:
+            if folder["username"] == username:
+                # Check if filepath starts with the folder path
+                if filepath.startswith(folder["folder_path"] + "/") or filepath == folder["folder_path"]:
+                    return True
+        return False
 
 
 class UserManager:
@@ -215,6 +375,7 @@ app.config.update(
 CORS(app)
 jwt = JWTManager(app)
 user_manager = UserManager(USERS_FILE)
+shared_manager = SharedFilesManager(SHARED_FILE)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -373,20 +534,27 @@ def list_files():
         if item.is_file():
             stat = item.stat()
             ext = item.suffix[1:].lower() if item.suffix else ''
+            filepath_relative = str(item.relative_to(user_dir))
+            is_shared = shared_manager.is_file_shared(username,
+                                                      filepath_relative) or shared_manager.is_in_shared_folder(username,
+                                                                                                               filepath_relative)
             files.append({
                 "name": item.name,
                 "size": stat.st_size,
                 "size_formatted": format_size(stat.st_size),
                 "modified": stat.st_mtime,
                 "type": get_file_type(item.name),
-                "ext": ext
+                "ext": ext,
+                "is_shared": is_shared
             })
             total_size += stat.st_size
         elif item.is_dir():
             stat = item.stat()
+            folder_relative = str(item.relative_to(user_dir))
             folders.append({
                 "name": item.name,
-                "modified": stat.st_mtime
+                "modified": stat.st_mtime,
+                "is_shared": shared_manager.is_folder_shared(username, folder_relative)
             })
 
     files.sort(key=lambda x: x["modified"], reverse=True)
@@ -399,6 +567,278 @@ def list_files():
         "total_files": len(files),
         "total_size": total_size,
         "total_size_formatted": format_size(total_size)
+    }), 200
+
+
+@app.route("/api/share/request", methods=["POST"])
+@jwt_required()
+def request_share():
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+    data = request.get_json()
+    filepath = data.get('filepath', '').strip()
+
+    filepath = validate_path(username, filepath)
+    user_dir = STORAGE_DIR / username
+    file_path = user_dir / filepath
+
+    try:
+        file_path.resolve().relative_to(user_dir.resolve())
+    except ValueError:
+        return jsonify({"msg": "Access denied"}), 403
+
+    if not file_path.exists():
+        return jsonify({"msg": "File not found"}), 404
+
+    stat = file_path.stat()
+    file_id = shared_manager.request_share(
+        username,
+        filepath,
+        file_path.name,
+        stat.st_size,
+        get_file_type(file_path.name)
+    )
+
+    # Auto-approve if user is admin
+    if user["role"] == "admin":
+        shared_manager.approve_share(file_id)
+        logger.info(f"Share auto-approved for admin: {username}/{filepath}")
+        return jsonify({"msg": "File shared successfully (auto-approved)", "file_id": file_id}), 200
+
+    logger.info(f"Share request: {username}/{filepath}")
+    return jsonify({"msg": "Share request submitted for approval", "file_id": file_id}), 200
+
+
+@app.route("/api/share/folder/request", methods=["POST"])
+@jwt_required()
+def request_folder_share():
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+    data = request.get_json()
+    folder_path = data.get('folder_path', '').strip()
+
+    folder_path = validate_path(username, folder_path)
+    user_dir = STORAGE_DIR / username
+    folder_full_path = user_dir / folder_path
+
+    try:
+        folder_full_path.resolve().relative_to(user_dir.resolve())
+    except ValueError:
+        return jsonify({"msg": "Access denied"}), 403
+
+    if not folder_full_path.exists() or not folder_full_path.is_dir():
+        return jsonify({"msg": "Folder not found"}), 404
+
+    folder_id = shared_manager.request_folder_share(
+        username,
+        folder_path,
+        folder_full_path.name
+    )
+
+    # Auto-approve if user is admin
+    if user["role"] == "admin":
+        shared_manager.approve_folder_share(folder_id)
+        logger.info(f"Folder share auto-approved for admin: {username}/{folder_path}")
+        return jsonify({"msg": "Folder shared successfully (auto-approved)", "folder_id": folder_id}), 200
+
+    logger.info(f"Folder share request: {username}/{folder_path}")
+    return jsonify({"msg": "Folder share request submitted for approval", "folder_id": folder_id}), 200
+
+
+@app.route("/api/share/pending", methods=["GET"])
+@jwt_required()
+def get_pending_shares():
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+
+    if user["role"] != "admin":
+        return jsonify({"msg": "Admin access required"}), 403
+
+    pending_files = shared_manager.get_pending()
+    pending_folders = shared_manager.get_pending_folders()
+    return jsonify({"shares": pending_files, "folders": pending_folders}), 200
+
+
+@app.route("/api/share/approve/<file_id>", methods=["POST"])
+@jwt_required()
+def approve_share(file_id):
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+
+    if user["role"] != "admin":
+        return jsonify({"msg": "Admin access required"}), 403
+
+    if shared_manager.approve_share(file_id):
+        logger.info(f"Share approved by {username}: {file_id}")
+        return jsonify({"msg": "Share approved"}), 200
+
+    return jsonify({"msg": "Share not found"}), 404
+
+
+@app.route("/api/share/folder/approve/<folder_id>", methods=["POST"])
+@jwt_required()
+def approve_folder_share(folder_id):
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+
+    if user["role"] != "admin":
+        return jsonify({"msg": "Admin access required"}), 403
+
+    if shared_manager.approve_folder_share(folder_id):
+        logger.info(f"Folder share approved by {username}: {folder_id}")
+        return jsonify({"msg": "Folder share approved"}), 200
+
+    return jsonify({"msg": "Folder share not found"}), 404
+
+
+@app.route("/api/share/reject/<file_id>", methods=["POST"])
+@jwt_required()
+def reject_share(file_id):
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+
+    if user["role"] != "admin":
+        return jsonify({"msg": "Admin access required"}), 403
+
+    if shared_manager.reject_share(file_id):
+        logger.info(f"Share rejected by {username}: {file_id}")
+        return jsonify({"msg": "Share rejected"}), 200
+
+    return jsonify({"msg": "Share not found"}), 404
+
+
+@app.route("/api/share/folder/reject/<folder_id>", methods=["POST"])
+@jwt_required()
+def reject_folder_share(folder_id):
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+
+    if user["role"] != "admin":
+        return jsonify({"msg": "Admin access required"}), 403
+
+    if shared_manager.reject_folder_share(folder_id):
+        logger.info(f"Folder share rejected by {username}: {folder_id}")
+        return jsonify({"msg": "Folder share rejected"}), 200
+
+    return jsonify({"msg": "Folder share not found"}), 404
+
+
+@app.route("/api/share/remove/<file_id>", methods=["DELETE"])
+@jwt_required()
+def remove_share(file_id):
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+
+    # Check if user is admin or file owner
+    approved = shared_manager.get_approved()
+    file_entry = None
+    for entry in approved:
+        if entry["id"] == file_id:
+            file_entry = entry
+            break
+
+    if not file_entry:
+        return jsonify({"msg": "Share not found"}), 404
+
+    if user["role"] != "admin" and file_entry["username"] != username:
+        return jsonify({"msg": "Permission denied"}), 403
+
+    if shared_manager.remove_share(file_id):
+        logger.info(f"Share removed by {username}: {file_id}")
+        return jsonify({"msg": "Share removed"}), 200
+
+    return jsonify({"msg": "Share not found"}), 404
+
+
+@app.route("/api/share/folder/remove/<folder_id>", methods=["DELETE"])
+@jwt_required()
+def remove_folder_share(folder_id):
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+
+    # Check if user is admin or folder owner
+    approved_folders = shared_manager.get_approved_folders()
+    folder_entry = None
+    for entry in approved_folders:
+        if entry["id"] == folder_id:
+            folder_entry = entry
+            break
+
+    if not folder_entry:
+        return jsonify({"msg": "Folder share not found"}), 404
+
+    if user["role"] != "admin" and folder_entry["username"] != username:
+        return jsonify({"msg": "Permission denied"}), 403
+
+    if shared_manager.remove_folder_share(folder_id):
+        logger.info(f"Folder share removed by {username}: {folder_id}")
+        return jsonify({"msg": "Folder share removed"}), 200
+
+    return jsonify({"msg": "Folder share not found"}), 404
+
+
+@app.route("/api/network/files", methods=["GET"])
+@jwt_required()
+def get_network_files():
+    """Network files - requires login"""
+    approved_files = shared_manager.get_approved()
+    approved_folders = shared_manager.get_approved_folders()
+    return jsonify({"files": approved_files, "folders": approved_folders}), 200
+
+
+@app.route("/api/network/folder/<folder_id>", methods=["GET"])
+@jwt_required()
+def get_network_folder_contents(folder_id):
+    """Get contents of a shared folder"""
+    approved_folders = shared_manager.get_approved_folders()
+
+    folder_entry = None
+    for entry in approved_folders:
+        if entry["id"] == folder_id:
+            folder_entry = entry
+            break
+
+    if not folder_entry:
+        return jsonify({"msg": "Folder not found"}), 404
+
+    user_dir = STORAGE_DIR / folder_entry["username"]
+    folder_path = user_dir / folder_entry["folder_path"]
+
+    if not folder_path.exists():
+        return jsonify({"msg": "Folder not found"}), 404
+
+    files = []
+    subfolders = []
+
+    def scan_directory(dir_path, relative_base=""):
+        for item in dir_path.iterdir():
+            if item.is_file():
+                stat = item.stat()
+                relative_path = str(item.relative_to(folder_path))
+                files.append({
+                    "id": secrets.token_urlsafe(16),
+                    "username": folder_entry["username"],
+                    "filepath": str(item.relative_to(user_dir)),
+                    "filename": item.name,
+                    "relative_path": relative_path,
+                    "file_size": stat.st_size,
+                    "file_type": get_file_type(item.name),
+                    "modified": stat.st_mtime
+                })
+            elif item.is_dir():
+                relative_path = str(item.relative_to(folder_path))
+                subfolders.append({
+                    "name": item.name,
+                    "relative_path": relative_path
+                })
+                scan_directory(item, relative_path)
+
+    scan_directory(folder_path)
+
+    return jsonify({
+        "folder": folder_entry,
+        "files": files,
+        "subfolders": subfolders
     }), 200
 
 
@@ -493,7 +933,60 @@ def preview_file(filepath):
     file_type = get_file_type(file_path.name)
 
     if file_type == 'image':
-        # Optimize image for preview
+        try:
+            img = Image.open(file_path)
+            img.thumbnail((1920, 1080), Image.Resampling.LANCZOS)
+            img_io = io.BytesIO()
+            img.save(img_io, format=img.format or 'PNG')
+            img_io.seek(0)
+            return send_file(img_io, mimetype=f'image/{img.format.lower()}')
+        except:
+            return send_file(file_path, mimetype=mimetypes.guess_type(file_path)[0])
+
+    elif file_type == 'pdf':
+        return send_file(file_path, mimetype='application/pdf')
+
+    elif file_type == 'text':
+        return send_file(file_path, mimetype='text/plain')
+
+    else:
+        return jsonify({"msg": "Preview not available for this file type"}), 400
+
+
+@app.route("/api/network/preview/<file_id>", methods=["GET"])
+def preview_network_file(file_id):
+    """Preview for shared files - requires login via token"""
+    token = request.args.get('token')
+    if not token:
+        return jsonify({"msg": "No token provided"}), 401
+
+    try:
+        from flask_jwt_extended import decode_token
+        decoded = decode_token(token)
+        username = decoded['sub']
+    except Exception:
+        return jsonify({"msg": "Invalid token"}), 401
+
+    approved = shared_manager.get_approved()
+
+    file_entry = None
+    for entry in approved:
+        if entry["id"] == file_id:
+            file_entry = entry
+            break
+
+    if not file_entry:
+        return jsonify({"msg": "File not found"}), 404
+
+    user_dir = STORAGE_DIR / file_entry["username"]
+    file_path = user_dir / file_entry["filepath"]
+
+    if not file_path.exists():
+        return jsonify({"msg": "File not found"}), 404
+
+    file_type = get_file_type(file_path.name)
+
+    if file_type == 'image':
         try:
             img = Image.open(file_path)
             img.thumbnail((1920, 1080), Image.Resampling.LANCZOS)
@@ -541,6 +1034,41 @@ def download_file(filepath):
         return jsonify({"msg": "File not found"}), 404
 
     logger.info(f"File downloaded: {username}/{filepath}")
+    return send_file(file_path, as_attachment=True, download_name=file_path.name)
+
+
+@app.route("/api/network/download/<file_id>", methods=["GET"])
+def download_network_file(file_id):
+    """Download for shared files - requires login via token"""
+    token = request.args.get('token')
+    if not token:
+        return jsonify({"msg": "No token provided"}), 401
+
+    try:
+        from flask_jwt_extended import decode_token
+        decoded = decode_token(token)
+        username = decoded['sub']
+    except Exception:
+        return jsonify({"msg": "Invalid token"}), 401
+
+    approved = shared_manager.get_approved()
+
+    file_entry = None
+    for entry in approved:
+        if entry["id"] == file_id:
+            file_entry = entry
+            break
+
+    if not file_entry:
+        return jsonify({"msg": "File not found"}), 404
+
+    user_dir = STORAGE_DIR / file_entry["username"]
+    file_path = user_dir / file_entry["filepath"]
+
+    if not file_path.exists():
+        return jsonify({"msg": "File not found"}), 404
+
+    logger.info(f"Network file downloaded: {file_id} by {username}")
     return send_file(file_path, as_attachment=True, download_name=file_path.name)
 
 
@@ -674,7 +1202,6 @@ def delete_user(target_username):
 
 
 if __name__ == "__main__":
-    # Check for PIL/Pillow
     try:
         import PIL
 

@@ -3,8 +3,6 @@ let currentUser = localStorage.getItem('username');
 let userRole = localStorage.getItem('role');
 let currentPath = '';
 
-console.log('App initialized. Token exists:', !!token);
-
 if (token) showMainPanel();
 
 /* =======================
@@ -68,6 +66,10 @@ function showTab(tabName) {
         loadUsers();
     } else if (tabName === 'pending') {
         loadPendingUsers();
+    } else if (tabName === 'shares') {
+        loadPendingShares();
+    } else if (tabName === 'network') {
+        loadNetworkFiles();
     }
 }
 
@@ -90,7 +92,16 @@ async function login() {
             body: JSON.stringify({ username, password })
         });
 
-        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Login failed');
+        if (!res.ok) {
+            const error = (await safeJson(res)).msg || 'Login failed';
+            showMessage(error, 'error');
+            
+            // Wait 2 seconds then show login page
+            setTimeout(() => {
+                showLogin();
+            }, 2000);
+            throw new Error(error);
+        }
 
         const data = await safeJson(res);
 
@@ -105,7 +116,8 @@ async function login() {
         showMainPanel();
 
     } catch (e) {
-        showMessage(e.message, 'error');
+        // Error message already shown above
+        console.error('Login error:', e.message);
     }
 }
 
@@ -161,6 +173,7 @@ function showMainPanel() {
     if (userRole === 'admin') {
         usersTab.style.display = 'block';
         pendingTab.style.display = 'block';
+        sharesTab.style.display = 'block';
     }
 
     currentPath = '';
@@ -185,33 +198,33 @@ async function loadFiles(path = '') {
         fileCount.textContent = data.total_files;
         storageUsed.textContent = data.total_size_formatted;
 
-        // Update breadcrumb
         updateBreadcrumb(currentPath);
 
-        // Render folders and files
         const fileListEl = document.getElementById('fileList');
-
         let html = '';
 
-        // Show folders first
         if (data.folders && data.folders.length > 0) {
             html += '<div class="section-header">Folders</div>';
-            html += data.folders.map(folder => `
+            html += data.folders.map(folder => {
+                const folderPath = currentPath ? currentPath + '/' + folder.name : folder.name;
+                return `
                 <div class="list-item">
                     <div class="item-info">
-                        <div class="item-name folder-item" onclick="loadFiles('${currentPath ? currentPath + '/' : ''}${escapeHtml(folder.name)}')">
+                        <div class="item-name folder-item" onclick="loadFiles('${escapeHtml(folderPath)}')">
                             📁 ${escapeHtml(folder.name)}
+                            ${folder.is_shared ? '<span class="badge badge-shared">Shared</span>' : ''}
                         </div>
                         <div class="item-meta">${formatDate(folder.modified)}</div>
                     </div>
                     <div class="item-actions">
-                        <button class="btn btn-danger btn-small" onclick="deleteFolder('${currentPath ? currentPath + '/' : ''}${escapeHtml(folder.name)}')">Delete</button>
+                        ${!folder.is_shared ? `<button class="btn btn-success btn-small" onclick="requestFolderShare('${escapeHtml(folderPath)}'); event.stopPropagation();">Share Folder</button>` : ''}
+                        <button class="btn btn-danger btn-small" onclick="deleteFolder('${escapeHtml(folderPath)}'); event.stopPropagation();">Delete</button>
                     </div>
                 </div>
-            `).join('');
+            `;
+            }).join('');
         }
 
-        // Show files
         if (data.files && data.files.length > 0) {
             html += '<div class="section-header">Files</div>';
             html += data.files.map(file => {
@@ -221,13 +234,17 @@ async function loadFiles(path = '') {
                 return `
                     <div class="list-item">
                         <div class="item-info">
-                            <div class="item-name">${getFileIcon(file.type)} ${escapeHtml(file.name)}</div>
-                            <div class="item-meta">${file.size_formatted} • ${formatDate(file.modified)} ${canPreview ? '• <span class="preview-badge">Preview available</span>' : ''}</div>
+                            <div class="item-name">
+                                ${getFileIcon(file.type)} ${escapeHtml(file.name)}
+                                ${file.is_shared ? '<span class="badge badge-shared">Shared</span>' : ''}
+                            </div>
+                            <div class="item-meta">${file.size_formatted} • ${formatDate(file.modified)}</div>
                         </div>
                         <div class="item-actions">
-                            ${canPreview ? `<button class="btn btn-secondary btn-small" onclick="previewFile('${escapeHtml(filePath)}')">👁️ Preview</button>` : ''}
-                            <button class="btn btn-primary btn-small" onclick="downloadFile('${escapeHtml(filePath)}')">⬇️ Download</button>
-                            <button class="btn btn-danger btn-small" onclick="deleteFile('${escapeHtml(filePath)}')">🗑️ Delete</button>
+                            ${canPreview ? `<button class="btn btn-secondary btn-small" onclick="previewFile('${escapeHtml(filePath)}')">Preview</button>` : ''}
+                            <button class="btn btn-primary btn-small" onclick="downloadFile('${escapeHtml(filePath)}')">Download</button>
+                            ${!file.is_shared ? `<button class="btn btn-success btn-small" onclick="requestShare('${escapeHtml(filePath)}')">Share</button>` : ''}
+                            <button class="btn btn-danger btn-small" onclick="deleteFile('${escapeHtml(filePath)}')">Delete</button>
                         </div>
                     </div>
                 `;
@@ -235,7 +252,7 @@ async function loadFiles(path = '') {
         }
 
         if (!html) {
-            html = '<div class="empty-state"><div class="empty-state-icon">📁</div><div>This folder is empty</div></div>';
+            html = '<div class="empty-state"><div class="empty-state-icon">📁</div><div class="empty-state-text">This folder is empty</div></div>';
         }
 
         fileListEl.innerHTML = html;
@@ -357,7 +374,6 @@ async function uploadFiles() {
 function previewFile(filepath) {
     const previewUrl = `/api/preview/${encodeURIComponent(filepath)}?token=${token}`;
 
-    // Create modal
     const modal = document.createElement('div');
     modal.className = 'preview-modal';
     modal.onclick = (e) => {
@@ -408,6 +424,396 @@ async function deleteFile(filepath) {
 }
 
 /* =======================
+   NETWORK SHARING
+   ======================= */
+async function requestShare(filepath) {
+    if (!confirm('Request to share this file on the network?')) return;
+
+    try {
+        const res = await fetch('/api/share/request', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify({ filepath })
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to request share');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        loadFiles(currentPath);
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+async function requestFolderShare(folderPath) {
+    if (!confirm('Request to share this folder and all its contents on the network?')) return;
+
+    try {
+        const res = await fetch('/api/share/folder/request', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify({ folder_path: folderPath })
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to request folder share');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        loadFiles(currentPath);
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+async function loadPendingShares() {
+    try {
+        const res = await fetch('/api/share/pending', {
+            headers: { Authorization: 'Bearer ' + token }
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to load pending shares');
+
+        const data = await safeJson(res);
+
+        const sharesListEl = document.getElementById('sharesList');
+        let html = '';
+
+        if (data.shares.length === 0 && data.folders.length === 0) {
+            html = '<div class="empty-state"><div class="empty-state-icon">✓</div><div class="empty-state-text">No pending share requests</div></div>';
+        } else {
+            if (data.folders && data.folders.length > 0) {
+                html += '<div class="section-header">Folder Share Requests</div>';
+                html += data.folders.map(folder => `
+                    <div class="list-item">
+                        <div class="item-info">
+                            <div class="item-name">📁 ${escapeHtml(folder.folder_name)}</div>
+                            <div class="item-meta">By ${escapeHtml(folder.username)} • ${formatDate(new Date(folder.requested_at).getTime() / 1000)}</div>
+                        </div>
+                        <div class="item-actions">
+                            <button class="btn btn-success btn-small" onclick="approveFolderShare('${escapeHtml(folder.id)}')">Approve</button>
+                            <button class="btn btn-danger btn-small" onclick="rejectFolderShare('${escapeHtml(folder.id)}')">Reject</button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            if (data.shares && data.shares.length > 0) {
+                html += '<div class="section-header">File Share Requests</div>';
+                html += data.shares.map(share => `
+                    <div class="list-item">
+                        <div class="item-info">
+                            <div class="item-name">${getFileIcon(share.file_type)} ${escapeHtml(share.filename)}</div>
+                            <div class="item-meta">By ${escapeHtml(share.username)} • ${formatSize(share.file_size)} • ${formatDate(new Date(share.requested_at).getTime() / 1000)}</div>
+                        </div>
+                        <div class="item-actions">
+                            <button class="btn btn-success btn-small" onclick="approveShare('${escapeHtml(share.id)}')">Approve</button>
+                            <button class="btn btn-danger btn-small" onclick="rejectShare('${escapeHtml(share.id)}')">Reject</button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        sharesListEl.innerHTML = html;
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+async function approveShare(fileId) {
+    try {
+        const res = await fetch(`/api/share/approve/${encodeURIComponent(fileId)}`, {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + token }
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to approve');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        loadPendingShares();
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+async function approveFolderShare(folderId) {
+    try {
+        const res = await fetch(`/api/share/folder/approve/${encodeURIComponent(folderId)}`, {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + token }
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to approve folder');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        loadPendingShares();
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+async function rejectShare(fileId) {
+    if (!confirm('Reject this share request?')) return;
+
+    try {
+        const res = await fetch(`/api/share/reject/${encodeURIComponent(fileId)}`, {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + token }
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to reject');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        loadPendingShares();
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+async function rejectFolderShare(folderId) {
+    if (!confirm('Reject this folder share request?')) return;
+
+    try {
+        const res = await fetch(`/api/share/folder/reject/${encodeURIComponent(folderId)}`, {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + token }
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to reject folder');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        loadPendingShares();
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+async function loadNetworkFiles() {
+    try {
+        const res = await fetch('/api/network/files', {
+            headers: { Authorization: 'Bearer ' + token }
+        });
+
+        if (!res.ok) {
+            const error = (await safeJson(res)).msg || 'Failed to load network files';
+            throw new Error(error);
+        }
+
+        const data = await safeJson(res);
+
+        const networkListEl = document.getElementById('networkList');
+        let html = '';
+
+        if (data.files.length === 0 && data.folders.length === 0) {
+            html = '<div class="empty-state"><div class="empty-state-icon">🌐</div><div class="empty-state-text">No shared files available</div></div>';
+        } else {
+            // Display shared folders
+            if (data.folders && data.folders.length > 0) {
+                html += '<div class="section-header">Shared Folders</div>';
+                html += data.folders.map(folder => {
+                    const isOwner = folder.username === currentUser;
+                    const isAdmin = userRole === 'admin';
+
+                    return `
+                        <div class="list-item">
+                            <div class="item-info">
+                                <div class="item-name">📁 ${escapeHtml(folder.folder_name)}</div>
+                                <div class="item-meta">Shared by ${escapeHtml(folder.username)} • ${formatDate(new Date(folder.approved_at).getTime() / 1000)}</div>
+                            </div>
+                            <div class="item-actions">
+                                <button class="btn btn-primary btn-small" onclick="viewNetworkFolder('${escapeHtml(folder.id)}')">Open Folder</button>
+                                ${(isOwner || isAdmin) ? `<button class="btn btn-danger btn-small" onclick="removeFolderShare('${escapeHtml(folder.id)}')">Remove</button>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            // Display shared files
+            if (data.files && data.files.length > 0) {
+                html += '<div class="section-header">Shared Files</div>';
+                html += data.files.map(file => {
+                    const canPreview = file.file_type !== 'other';
+                    const isOwner = file.username === currentUser;
+                    const isAdmin = userRole === 'admin';
+
+                    return `
+                        <div class="list-item">
+                            <div class="item-info">
+                                <div class="item-name">${getFileIcon(file.file_type)} ${escapeHtml(file.filename)}</div>
+                                <div class="item-meta">Shared by ${escapeHtml(file.username)} • ${formatSize(file.file_size)} • ${formatDate(new Date(file.approved_at).getTime() / 1000)}</div>
+                            </div>
+                            <div class="item-actions">
+                                ${canPreview ? `<button class="btn btn-secondary btn-small" onclick="previewNetworkFile('${escapeHtml(file.id)}')">Preview</button>` : ''}
+                                <button class="btn btn-primary btn-small" onclick="downloadNetworkFile('${escapeHtml(file.id)}')">Download</button>
+                                ${(isOwner || isAdmin) ? `<button class="btn btn-danger btn-small" onclick="removeNetworkShare('${escapeHtml(file.id)}')">Remove</button>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
+
+        networkListEl.innerHTML = html;
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+async function viewNetworkFolder(folderId) {
+    try {
+        const res = await fetch(`/api/network/folder/${encodeURIComponent(folderId)}`, {
+            headers: { Authorization: 'Bearer ' + token }
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to load folder');
+
+        const data = await safeJson(res);
+
+        // Create modal to show folder contents
+        const modal = document.createElement('div');
+        modal.className = 'preview-modal';
+        modal.onclick = (e) => {
+            if (e.target === modal) modal.remove();
+        };
+
+        const content = document.createElement('div');
+        content.className = 'preview-content';
+        content.style.maxHeight = '80vh';
+        content.style.overflow = 'auto';
+        content.style.padding = '2rem';
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'preview-close';
+        closeBtn.innerHTML = '×';
+        closeBtn.onclick = () => modal.remove();
+
+        let html = `
+            <h2 style="margin-bottom: 1rem; color: var(--text-primary);">📁 ${escapeHtml(data.folder.folder_name)}</h2>
+            <p style="margin-bottom: 1.5rem; color: var(--text-secondary);">Shared by ${escapeHtml(data.folder.username)}</p>
+        `;
+
+        if (data.files.length === 0) {
+            html += '<div class="empty-state"><div class="empty-state-icon">📁</div><div class="empty-state-text">This folder is empty</div></div>';
+        } else {
+            data.files.forEach(file => {
+                const canPreview = file.file_type !== 'other';
+                html += `
+                    <div class="list-item" style="margin-bottom: 0.75rem;">
+                        <div class="item-info">
+                            <div class="item-name">${getFileIcon(file.file_type)} ${escapeHtml(file.relative_path)}</div>
+                            <div class="item-meta">${formatSize(file.file_size)}</div>
+                        </div>
+                        <div class="item-actions">
+                            ${canPreview ? `<button class="btn btn-secondary btn-small" onclick="previewFile('${escapeHtml(file.filepath)}')">Preview</button>` : ''}
+                            <button class="btn btn-primary btn-small" onclick="downloadFile('${escapeHtml(file.filepath)}')">Download</button>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        content.innerHTML = html;
+        content.insertBefore(closeBtn, content.firstChild);
+        modal.appendChild(content);
+        document.body.appendChild(modal);
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+async function removeFolderShare(folderId) {
+    if (!confirm('Remove this folder from network sharing?')) return;
+
+    try {
+        const res = await fetch(`/api/share/folder/remove/${encodeURIComponent(folderId)}`, {
+            method: 'DELETE',
+            headers: { Authorization: 'Bearer ' + token }
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to remove folder share');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        loadNetworkFiles();
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+function previewNetworkFile(fileId) {
+    const previewUrl = `/api/network/preview/${encodeURIComponent(fileId)}?token=${token}`;
+
+    const modal = document.createElement('div');
+    modal.className = 'preview-modal';
+    modal.onclick = (e) => {
+        if (e.target === modal) modal.remove();
+    };
+
+    const content = document.createElement('div');
+    content.className = 'preview-content';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'preview-close';
+    closeBtn.innerHTML = '×';
+    closeBtn.onclick = () => modal.remove();
+
+    const iframe = document.createElement('iframe');
+    iframe.src = previewUrl;
+    iframe.className = 'preview-frame';
+
+    content.appendChild(closeBtn);
+    content.appendChild(iframe);
+    modal.appendChild(content);
+    document.body.appendChild(modal);
+}
+
+function downloadNetworkFile(fileId) {
+    window.open(`/api/network/download/${encodeURIComponent(fileId)}?token=${token}`, '_blank');
+}
+
+async function removeNetworkShare(fileId) {
+    if (!confirm('Remove this file from network sharing?')) return;
+
+    try {
+        const res = await fetch(`/api/share/remove/${encodeURIComponent(fileId)}`, {
+            method: 'DELETE',
+            headers: { Authorization: 'Bearer ' + token }
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to remove share');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        loadNetworkFiles();
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+/* =======================
    USERS (ADMIN)
    ======================= */
 async function loadUsers() {
@@ -422,7 +828,7 @@ async function loadUsers() {
 
         const userListEl = document.getElementById('userList');
         if (data.users.length === 0) {
-            userListEl.innerHTML = '<div class="empty-state"><div class="empty-state-icon">👥</div><div>No users found</div></div>';
+            userListEl.innerHTML = '<div class="empty-state"><div class="empty-state-icon">👥</div><div class="empty-state-text">No users found</div></div>';
         } else {
             userListEl.innerHTML = data.users.map(user => `
                 <div class="list-item">
@@ -458,7 +864,7 @@ async function loadPendingUsers() {
 
         const pendingListEl = document.getElementById('pendingList');
         if (data.users.length === 0) {
-            pendingListEl.innerHTML = '<div class="empty-state"><div class="empty-state-icon">✓</div><div>No pending approvals</div></div>';
+            pendingListEl.innerHTML = '<div class="empty-state"><div class="empty-state-icon">✓</div><div class="empty-state-text">No pending approvals</div></div>';
         } else {
             pendingListEl.innerHTML = data.users.map(user => `
                 <div class="list-item">
@@ -467,8 +873,8 @@ async function loadPendingUsers() {
                         <div class="item-meta">Requested: ${formatDate(new Date(user.created_at).getTime() / 1000)}</div>
                     </div>
                     <div class="item-actions">
-                        <button class="btn btn-success btn-small" onclick="approveUser('${escapeHtml(user.username)}')">✓ Approve</button>
-                        <button class="btn btn-danger btn-small" onclick="rejectUser('${escapeHtml(user.username)}')">✗ Reject</button>
+                        <button class="btn btn-success btn-small" onclick="approveUser('${escapeHtml(user.username)}')">Approve</button>
+                        <button class="btn btn-danger btn-small" onclick="rejectUser('${escapeHtml(user.username)}')">Reject</button>
                     </div>
                 </div>
             `).join('');

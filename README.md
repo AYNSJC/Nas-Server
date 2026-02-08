@@ -1,389 +1,310 @@
-# 📦 Professional NAS System
+# Professional Network Storage System
 
-A production-ready Network Attached Storage system with user management, file organization, and preview capabilities.
+A modern, secure network-attached storage (NAS) system with file sharing capabilities. All users must login to access network shared files.
 
-## ✨ Features
+## Features
 
-### 🔐 Authentication & User Management
-- **User Registration** with admin approval workflow
-- **Show/Hide Password** toggle on all password fields
-- Role-based access control (Admin/User)
-- Secure password hashing with bcrypt
-- JWT token authentication
+### Core Features
+- **User Authentication**: Secure login/registration with admin approval workflow
+- **File Management**: Upload, download, preview, organize files in folders
+- **Network Sharing**: Share files with admin approval - all viewers must be logged in
+- **Access Control**: Only file owner and admin can delete shared files
+- **Admin Dashboard**: User management, approve registrations and share requests
+- **Professional UI**: Modern, clean design with improved aesthetics
 
-### 📁 File Management
-- **Upload multiple files** with drag & drop support
-- **Download files** with direct links
-- **Preview files** in browser:
-  - 🖼️ Images (PNG, JPG, JPEG, GIF, BMP, WEBP, SVG)
-  - 📄 PDFs
-  - 📝 Text files (TXT, MD, JSON, XML, CSV)
-- **File type validation** with dangerous extension blocking
-- Automatic duplicate file handling
+### Network Sharing Workflow
+1. **Request to Share**: Users can request to share their files on the network
+2. **Admin Approval**: Admins review and approve/reject share requests
+3. **Authenticated Access**: All users must login to view/download network files
+4. **Delete Control**: Only file owner or admin can remove shared files
 
-### 📂 Folder Organization
-- **Create folders** for better organization
-- **Navigate folder structure** with breadcrumb navigation
-- **Delete folders** and their contents
-- Nested folder support
+### User Roles & Permissions
+- **Admin**: 
+  - Full control over all files
+  - Approve/reject user registrations
+  - Approve/reject share requests
+  - Delete any file (own or shared)
+  - Manage all users
 
-### 👥 Admin Features
-- Approve/reject user registrations
-- Create users directly (auto-approved)
-- Delete users and their data
-- View storage usage per user
-- Manage user roles
+- **User**: 
+  - Upload files to personal storage
+  - Request to share files on network
+  - View and download all network shared files (after login)
+  - Delete only own files and own shares
 
-### 🎨 Professional UI
-- Clean, modern interface
-- Responsive design (mobile-friendly)
-- File type icons
-- Real-time storage statistics
-- Intuitive breadcrumb navigation
-- Modal preview window
+- **Network Viewers**: 
+  - Must be logged in
+  - Can view and download all approved shared files
+  - Cannot delete files unless they are the owner or admin
 
-## 🚀 Installation
+## Installation & Setup
 
-### Prerequisites
+### 1. Install Python Dependencies
+
 ```bash
-Python 3.8+
-pip
+pip install flask flask-jwt-extended flask-cors bcrypt pillow
 ```
 
-### 1. Install Dependencies
+### 2. Create Directory Structure
+
 ```bash
-pip install flask flask-jwt-extended flask-cors bcrypt Pillow
+mkdir nas_system
+cd nas_system
+mkdir static
 ```
 
-**Required packages:**
-- `flask` - Web framework
-- `flask-jwt-extended` - JWT authentication
-- `flask-cors` - CORS support
-- `bcrypt` - Password hashing
-- `Pillow` - Image processing for previews
+### 3. Copy Files
 
-### 2. Project Structure
-Create the following structure:
+Place the files in the following structure:
+
 ```
-NASServer/
-├── main.py              # Backend server
-├── users.json           # Auto-generated user database
+nas_system/
+├── app.py              # Backend server (main Python file)
 ├── static/
-│   ├── index.html       # Frontend HTML
-│   ├── app.js          # Frontend JavaScript
-│   └── style.css       # Frontend CSS
-├── nas_storage/        # Auto-generated storage directory
-│   ├── admin/          # Admin's files
-│   └── username/       # Each user's files
-└── logs/
-    └── nas.log         # Auto-generated log file
+│   ├── index.html     # Frontend HTML
+│   ├── app.js         # Frontend JavaScript
+│   └── style.css      # Modern CSS styling
 ```
 
-### 3. Create Files
+**Important**: 
+- `app.py` goes in the root `nas_system/` directory
+- `index.html`, `app.js`, and `style.css` go inside the `static/` subdirectory
 
-**Save the backend as `main.py`**
-**Create `static/` folder and save:**
-- `index.html`
-- `app.js`
-- `style.css`
+### 4. Run the Application
 
-### 4. Run the Server
 ```bash
-python main.py
+python app.py
 ```
 
 The server will start on `http://localhost:5000`
 
-## 📖 Usage Guide
+### 5. First Login
 
-### First Time Setup
+**Default Admin Credentials:**
+- Username: `admin`
+- Password: `admin123`
 
-1. **Start the server**
-   ```bash
-   python main.py
-   ```
+⚠️ **CRITICAL**: Change the admin password immediately after first login!
 
-2. **Login as admin**
-   - Username: `admin`
-   - Password: `admin123`
-   - ⚠️ **Change this password immediately!**
+## File Locations After First Run
 
-3. **Create users or approve registrations**
+The application will automatically create these directories:
 
-### For Users
-
-#### Register Account
-1. Click "Don't have an account? Register"
-2. Choose username (3-32 characters, letters/numbers/underscore)
-3. Choose password (minimum 6 characters)
-4. Wait for admin approval
-5. Login once approved
-
-#### Upload Files
-1. Navigate to desired folder (or stay in root)
-2. Click "📤 Upload Files"
-3. Select files (multiple selection supported)
-4. Files are uploaded to current folder
-
-#### Organize with Folders
-1. Click "📁 New Folder"
-2. Enter folder name
-3. Click on folder to navigate inside
-4. Use breadcrumb to navigate back
-
-#### Preview Files
-1. Click "👁️ Preview" on supported files
-2. View in modal window
-3. Click outside modal or × to close
-
-#### Download Files
-1. Click "⬇️ Download" on any file
-2. File downloads to your browser's download folder
-
-### For Admins
-
-#### Approve New Users
-1. Go to "Pending Approvals" tab
-2. Review registration requests
-3. Click "✓ Approve" or "✗ Reject"
-
-#### Create Users Directly
-1. Go to "Users" tab
-2. Fill in username and password
-3. Select role (User or Admin)
-4. Click "Add User"
-
-#### Manage Users
-1. Go to "Users" tab
-2. View all users and their storage usage
-3. Delete users if needed (except admin)
-
-## 🔒 Security Features
-
-### Password Security
-- Show/hide password toggle on all password fields
-- Minimum 6 character requirement
-- Bcrypt hashing with salt
-- Passwords never stored in plain text
-
-### File Security
-- Path traversal protection
-- Dangerous file extension blocking
-- User isolation (users can't access other's files)
-- Secure filename sanitization
-
-### Authentication
-- JWT token-based authentication
-- 8-hour token expiration
-- Admin-only endpoints protected
-
-### Validation
-- Username format validation
-- File type validation
-- Path validation
-- Input sanitization
-
-## 📁 File Preview Support
-
-| Type | Extensions | Preview |
-|------|-----------|---------|
-| **Images** | PNG, JPG, JPEG, GIF, BMP, WEBP, SVG | ✅ Full preview |
-| **PDF** | PDF | ✅ In-browser viewer |
-| **Text** | TXT, MD, JSON, XML, CSV, LOG | ✅ Text viewer |
-| **Documents** | DOCX, XLSX, PPTX | ⬇️ Download only |
-| **Archives** | ZIP, RAR, 7Z | ⬇️ Download only |
-| **Media** | MP3, MP4, AVI, MKV | ⬇️ Download only |
-
-## ⚙️ Configuration
-
-### Environment Variables
-```bash
-# JWT Secret (highly recommended to set)
-export JWT_SECRET_KEY="your-very-secret-key-here"
-
-# Max file size (default 500MB)
-export MAX_FILE_SIZE=524288000
+```
+nas_system/
+├── app.py
+├── static/
+│   ├── index.html
+│   ├── app.js
+│   └── style.css
+├── nas_storage/          # User files (auto-created)
+│   └── username/         # Each user gets their own folder
+├── users.json            # User database (auto-created)
+├── shared_files.json     # Shared files database (auto-created)
+└── logs/                 # Application logs (auto-created)
+    └── nas.log
 ```
 
-### Allowed File Types
-Edit in `main.py`:
+## Usage Guide
+
+### For Regular Users
+
+1. **Register Account**
+   - Click "Register" on login page
+   - Enter username and password
+   - Wait for admin approval
+
+2. **Upload Files**
+   - Once approved, click "Upload Files" button
+   - Select one or multiple files
+   - Files are uploaded to your personal storage
+
+3. **Organize Files**
+   - Click "New Folder" to create folders
+   - Navigate through folder structure using breadcrumbs
+
+4. **Share Files on Network**
+   - Find the file you want to share
+   - Click "Share" button
+   - Wait for admin approval
+   - Once approved, file appears in "Network" tab for all users
+
+5. **Browse Network Files**
+   - Click "Network" tab
+   - View all files shared by other users
+   - Preview or download files
+   - Only owner and admin can delete
+
+### For Administrators
+
+1. **Approve Users**
+   - Click "User Approvals" tab
+   - Review pending registrations
+   - Click "Approve" or "Reject"
+
+2. **Approve Shares**
+   - Click "Share Requests" tab
+   - Review pending file share requests
+   - Click "Approve" to make file available on network
+   - Click "Reject" to deny the request
+
+3. **Manage Users**
+   - Click "Users" tab
+   - Add new users directly (bypassing approval)
+   - Delete users and their files
+   - View storage usage per user
+
+4. **Monitor Network**
+   - Click "Network" tab
+   - View all shared files
+   - Remove any inappropriate shares
+
+## Security Features
+
+✓ Password hashing with bcrypt
+✓ JWT token-based authentication
+✓ Path traversal prevention
+✓ File type validation
+✓ Dangerous file extension blocking
+✓ Admin-only operations protection
+✓ Authenticated network access
+
+## Supported File Types
+
+**Preview Available (in browser):**
+- **Images**: PNG, JPG, JPEG, GIF, BMP, WEBP, SVG
+- **Documents**: PDF
+- **Text Files**: TXT, MD, JSON, XML, CSV, LOG
+
+**Upload Supported:**
+- **Documents**: PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, ODT, ODS, ODP
+- **Images**: PNG, JPG, JPEG, GIF, BMP, SVG, WEBP, ICO, TIFF
+- **Archives**: ZIP, RAR, 7Z
+- **Media**: MP3, MP4, AVI, MKV
+- **Data**: CSV, JSON, XML
+- **Text**: TXT, MD
+
+**Blocked for Security:**
+- Executable files: EXE, BAT, CMD, COM, SH, PS1
+- Scripts: VBS, JS, JAR
+- System files: DLL, SO, MSI
+
+## Configuration Options
+
+### Maximum File Size
+
+Default: 500 MB. To change, edit `app.py`:
+
 ```python
-ALLOWED_EXTENSIONS = {
-    'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif',
-    # Add more extensions here
-}
+MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
 ```
 
-### Storage Location
-Default: `./nas_storage/`
+### JWT Token Expiration
 
-To change, edit in `main.py`:
+Default: 8 hours. To change, edit `app.py`:
+
 ```python
-STORAGE_DIR = BASE_DIR / "nas_storage"  # Change path here
+JWT_ACCESS_TOKEN_EXPIRES=timedelta(hours=8)
 ```
 
-## 🌐 Production Deployment
+### Server Port
 
-### Using Gunicorn (Recommended)
-```bash
-# Install Gunicorn
-pip install gunicorn
+Default: 5000. To change, edit the last line in `app.py`:
 
-# Run with 4 workers
-gunicorn -w 4 -b 0.0.0.0:5000 main:app
+```python
+app.run(host="0.0.0.0", port=5000, debug=True)
 ```
 
-### Using systemd (Linux)
-Create `/etc/systemd/system/nas.service`:
-```ini
-[Unit]
-Description=NAS System
-After=network.target
+## Network Access
 
-[Service]
-User=your-user
-WorkingDirectory=/path/to/NASServer
-Environment="JWT_SECRET_KEY=your-secret-key"
-ExecStart=/usr/bin/gunicorn -w 4 -b 0.0.0.0:5000 main:app
-Restart=always
+To make the server accessible on your local network:
 
-[Install]
-WantedBy=multi-user.target
-```
+1. Find your server's IP address:
+   - Windows: `ipconfig`
+   - Linux/Mac: `ifconfig` or `ip addr`
 
-Enable and start:
-```bash
-sudo systemctl enable nas
-sudo systemctl start nas
-```
+2. Other devices can access at: `http://YOUR_IP:5000`
 
-### Nginx Reverse Proxy
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com;
+3. **Firewall**: Make sure port 5000 is open
 
-    client_max_body_size 500M;
-
-    location / {
-        proxy_pass http://localhost:5000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-}
-```
-
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### "Module not found" errors
 ```bash
-pip install flask flask-jwt-extended flask-cors bcrypt Pillow
+pip install flask flask-jwt-extended flask-cors bcrypt pillow
 ```
 
-### "Corrupted users.json" error
-- Delete `users.json` file
-- Restart server - it will create a new one
+### "Permission denied" errors
+- On Linux/Mac, you may need to use `sudo` or run as administrator
 
-### Can't preview images
+### Files not appearing
+- Check that files are in the correct `static/` directory
+- Verify the directory structure matches the layout above
+
+### Preview not working
 ```bash
 pip install Pillow
 ```
 
-### Files not uploading
-- Check file size (default limit: 500MB)
-- Check file extension is allowed
-- Check available disk space
+### Cannot access from other devices
+- Check firewall settings
+- Ensure server is running with `host="0.0.0.0"`
+- Verify IP address is correct
 
-### Port already in use
-Change port in `main.py`:
-```python
-app.run(host="0.0.0.0", port=5001)  # Change 5000 to 5001
-```
+## Production Deployment
 
-## 📝 Logging
+For production use:
 
-Logs are stored in `logs/nas.log`
+1. **Change debug mode** in `app.py`:
+   ```python
+   app.run(host="0.0.0.0", port=5000, debug=False)
+   ```
 
-**Logged events:**
-- User logins/registrations
-- File uploads/downloads/deletions
-- Folder creation/deletion
-- User management actions
-- Security warnings (path traversal attempts)
-- Errors and exceptions
+2. **Set strong JWT secret**:
+   ```bash
+   export JWT_SECRET_KEY="your-very-long-random-secret-key-here"
+   ```
 
-## 🔄 Backup
+3. **Use a production server** (not Flask's built-in):
+   ```bash
+   pip install gunicorn
+   gunicorn -w 4 -b 0.0.0.0:5000 app:app
+   ```
 
-### Backup User Data
-```bash
-# Backup users database
-cp users.json users_backup.json
+4. **Set up HTTPS** using nginx or Apache as reverse proxy
 
-# Backup all files
-tar -czf nas_backup_$(date +%Y%m%d).tar.gz nas_storage/ users.json
-```
+5. **Regular backups** of:
+   - `nas_storage/` directory
+   - `users.json`
+   - `shared_files.json`
 
-### Restore
-```bash
-# Restore from backup
-tar -xzf nas_backup_YYYYMMDD.tar.gz
-```
+## Architecture
 
-## 📊 Storage Management
+- **Backend**: Flask (Python web framework)
+- **Authentication**: JWT tokens with bcrypt password hashing
+- **Storage**: File system based (local storage)
+- **Database**: JSON files (users.json, shared_files.json)
+- **Frontend**: Vanilla JavaScript with modern CSS
 
-- Each user has isolated storage
-- Storage usage tracked per user
-- Admins can view all users' storage
-- No global storage quotas (implement if needed)
+## Browser Compatibility
 
-## 🚧 Limitations
+✓ Chrome/Edge (recommended)
+✓ Firefox
+✓ Safari
+✓ Opera
 
-- Maximum file size: 500MB (configurable)
-- No file versioning
-- No file sharing between users
-- No public file links
-- Preview only for supported file types
+## License
 
-## 🎯 Future Enhancements
+Open source - use as you wish!
 
-Potential features to add:
-- [ ] File sharing with other users
-- [ ] Public file links with expiration
-- [ ] Storage quotas per user
-- [ ] File versioning
-- [ ] Search functionality
-- [ ] Bulk operations
-- [ ] Mobile app
-- [ ] Two-factor authentication
+## Support
 
-## 📄 License
+For issues or questions, check:
+1. This README for common solutions
+2. Application logs in `logs/nas.log`
+3. Browser console for frontend errors
 
-This project is open source and available for personal and commercial use.
+## Version
 
-## 👤 Support
-
-For issues or questions:
-1. Check the troubleshooting section
-2. Review logs in `logs/nas.log`
-3. Check console output for errors
-
-## 🎉 Credits
-
-Built with:
-- Flask - Web framework
-- JWT - Authentication
-- Bcrypt - Password security
-- Pillow - Image processing
-- Modern CSS - Professional UI
-
----
-
-**⚠️ Important Security Notes:**
-1. Change default admin password immediately
-2. Set a strong JWT_SECRET_KEY in production
-3. Use HTTPS in production
-4. Regularly backup your data
-5. Keep dependencies updated
-
-**Happy file storing! 📦**
+Version: 2.0
+Last Updated: February 2026

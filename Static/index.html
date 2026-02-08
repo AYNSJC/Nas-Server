@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NAS - Network Storage</title>
+    <title>Network Storage</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div id="navbar" style="display: none;">
         <div class="navbar">
-            <div class="navbar-brand"><span>📦</span> <span>Network Storage</span></div>
+            <div class="navbar-brand"><span>🗄️</span> <span>Network Storage</span></div>
             <div class="navbar-user">
                 <div class="user-badge"><span id="navUsername"></span><span id="navRole"></span></div>
                 <button class="btn btn-secondary btn-small" onclick="logout()">Logout</button>
@@ -72,8 +72,10 @@
         <div id="mainAlert" class="alert"></div>
         <div class="tabs">
             <button class="tab active" onclick="showTab('files')">My Files</button>
+            <button class="tab" onclick="showTab('network')">Network</button>
             <button class="tab" id="usersTab" onclick="showTab('users')" style="display: none;">Users</button>
-            <button class="tab" id="pendingTab" onclick="showTab('pending')" style="display: none;">Pending Approvals</button>
+            <button class="tab" id="pendingTab" onclick="showTab('pending')" style="display: none;">User Approvals</button>
+            <button class="tab" id="sharesTab" onclick="showTab('shares')" style="display: none;">Share Requests</button>
         </div>
 
         <div class="tab-content active" id="filesContent">
@@ -94,13 +96,22 @@
 
             <div class="card">
                 <div class="file-actions-bar">
-                    <button class="btn btn-secondary" onclick="createFolder()">📁 New Folder</button>
-                    <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">📤 Upload Files</button>
+                    <button class="btn btn-secondary" onclick="createFolder()">New Folder</button>
+                    <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">Upload Files</button>
                     <input type="file" id="fileInput" multiple style="display: none;" onchange="uploadFiles()">
                 </div>
             </div>
 
             <div id="fileList"></div>
+        </div>
+
+        <div class="tab-content" id="networkContent">
+            <div class="network-header">
+                <h2 class="network-title">Network Shared Files</h2>
+                <p class="network-subtitle">Access files shared by all users on the network</p>
+            </div>
+
+            <div id="networkList"></div>
         </div>
 
         <div class="tab-content" id="usersContent">
@@ -137,6 +148,14 @@
             <div class="card">
                 <div class="card-header">Pending User Approvals</div>
                 <div id="pendingList"></div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="sharesContent">
+            <div class="card">
+                <div class="card-header">Pending Share Requests</div>
+                <p style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 1rem;">Review and approve files that users want to share on the network</p>
+                <div id="sharesList"></div>
             </div>
         </div>
     </div>
