@@ -74,6 +74,184 @@ function showTab(tabName) {
 }
 
 /* =======================
+   SETTINGS MODAL
+   ======================= */
+function openSettings() {
+    const modal = document.createElement('div');
+    modal.className = 'settings-modal';
+    modal.id = 'settingsModal';
+    modal.onclick = (e) => {
+        if (e.target === modal) modal.remove();
+    };
+
+    modal.innerHTML = `
+        <div class="settings-content">
+            <div class="settings-header">
+                <h2 class="settings-title">Account Settings</h2>
+                <button class="settings-close" onclick="document.getElementById('settingsModal').remove()">×</button>
+            </div>
+            <div class="settings-body">
+                <div id="settingsAlert" class="alert"></div>
+                
+                <div class="settings-section">
+                    <h3 class="settings-section-title">Change Password</h3>
+                    <div class="form-group">
+                        <label>Current Password</label>
+                        <div class="password-input">
+                            <input type="password" id="currentPassword" placeholder="Enter current password">
+                            <button type="button" class="password-toggle" onclick="togglePassword('currentPassword', this)">👁️</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>New Password</label>
+                        <div class="password-input">
+                            <input type="password" id="newPassword" placeholder="Enter new password (min 6 characters)">
+                            <button type="button" class="password-toggle" onclick="togglePassword('newPassword', this)">👁️</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Confirm New Password</label>
+                        <div class="password-input">
+                            <input type="password" id="confirmNewPassword" placeholder="Confirm new password">
+                            <button type="button" class="password-toggle" onclick="togglePassword('confirmNewPassword', this)">👁️</button>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" onclick="changePassword()">Update Password</button>
+                </div>
+
+                <div class="settings-section">
+                    <h3 class="settings-section-title">Change Username</h3>
+                    <div class="form-group">
+                        <label>New Username</label>
+                        <input type="text" id="newUsername" placeholder="Enter new username (3-32 characters)">
+                        <small class="form-help">Only letters, numbers, and underscores</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Confirm Password</label>
+                        <div class="password-input">
+                            <input type="password" id="confirmPasswordUsername" placeholder="Enter your password to confirm">
+                            <button type="button" class="password-toggle" onclick="togglePassword('confirmPasswordUsername', this)">👁️</button>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" onclick="changeUsername()">Update Username</button>
+                </div>
+
+                <div class="settings-section">
+                    <h3 class="settings-section-title">Account Information</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 0.5rem;"><strong>Username:</strong> ${currentUser}</p>
+                    <p style="color: var(--text-secondary);"><strong>Role:</strong> ${userRole}</p>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+}
+
+async function changePassword() {
+    const currentPassword = document.getElementById('currentPassword').value;
+    const newPassword = document.getElementById('newPassword').value;
+    const confirmNewPassword = document.getElementById('confirmNewPassword').value;
+
+    if (!currentPassword || !newPassword || !confirmNewPassword) {
+        showMessage('Please fill in all fields', 'error', 'settingsAlert');
+        return;
+    }
+
+    if (newPassword !== confirmNewPassword) {
+        showMessage('New passwords do not match', 'error', 'settingsAlert');
+        return;
+    }
+
+    if (newPassword.length < 6) {
+        showMessage('New password must be at least 6 characters', 'error', 'settingsAlert');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/account/change-password', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify({
+                current_password: currentPassword,
+                new_password: newPassword
+            })
+        });
+
+        if (!res.ok) {
+            const error = (await safeJson(res)).msg || 'Failed to change password';
+            throw new Error(error);
+        }
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'settingsAlert');
+        
+        // Clear form
+        document.getElementById('currentPassword').value = '';
+        document.getElementById('newPassword').value = '';
+        document.getElementById('confirmNewPassword').value = '';
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'settingsAlert');
+    }
+}
+
+async function changeUsername() {
+    const newUsername = document.getElementById('newUsername').value.trim();
+    const password = document.getElementById('confirmPasswordUsername').value;
+
+    if (!newUsername || !password) {
+        showMessage('Please fill in all fields', 'error', 'settingsAlert');
+        return;
+    }
+
+    if (newUsername === currentUser) {
+        showMessage('New username must be different', 'error', 'settingsAlert');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/account/change-username', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify({
+                new_username: newUsername,
+                password: password
+            })
+        });
+
+        if (!res.ok) {
+            const error = (await safeJson(res)).msg || 'Failed to change username';
+            throw new Error(error);
+        }
+
+        const data = await safeJson(res);
+        
+        // Update local storage with new token and username
+        token = data.access_token;
+        currentUser = data.new_username;
+        localStorage.setItem('token', token);
+        localStorage.setItem('username', currentUser);
+
+        showMessage(data.msg + '. Refreshing...', 'success', 'settingsAlert');
+        
+        // Refresh page after 1 second
+        setTimeout(() => {
+            location.reload();
+        }, 1000);
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'settingsAlert');
+    }
+}
+
+/* =======================
    AUTH
    ======================= */
 async function login() {
@@ -96,7 +274,8 @@ async function login() {
             const error = (await safeJson(res)).msg || 'Login failed';
             showMessage(error, 'error');
             
-            // Wait 2 seconds then show login page
+            // Clear password and wait 2 seconds then show login page
+            loginPassword.value = '';
             setTimeout(() => {
                 showLogin();
             }, 2000);
@@ -116,7 +295,6 @@ async function login() {
         showMainPanel();
 
     } catch (e) {
-        // Error message already shown above
         console.error('Login error:', e.message);
     }
 }
@@ -297,7 +475,6 @@ function getFileIcon(type) {
     };
     return icons[type] || '📎';
 }
-
 async function createFolder() {
     const folderName = prompt('Enter folder name:');
     if (!folderName || !folderName.trim()) return;
@@ -625,7 +802,6 @@ async function loadNetworkFiles() {
         if (data.files.length === 0 && data.folders.length === 0) {
             html = '<div class="empty-state"><div class="empty-state-icon">🌐</div><div class="empty-state-text">No shared files available</div></div>';
         } else {
-            // Display shared folders
             if (data.folders && data.folders.length > 0) {
                 html += '<div class="section-header">Shared Folders</div>';
                 html += data.folders.map(folder => {
@@ -647,7 +823,6 @@ async function loadNetworkFiles() {
                 }).join('');
             }
 
-            // Display shared files
             if (data.files && data.files.length > 0) {
                 html += '<div class="section-header">Shared Files</div>';
                 html += data.files.map(file => {
@@ -689,7 +864,6 @@ async function viewNetworkFolder(folderId) {
 
         const data = await safeJson(res);
 
-        // Create modal to show folder contents
         const modal = document.createElement('div');
         modal.className = 'preview-modal';
         modal.onclick = (e) => {
@@ -708,7 +882,7 @@ async function viewNetworkFolder(folderId) {
         closeBtn.onclick = () => modal.remove();
 
         let html = `
-            <h2 style="margin-bottom: 1rem; color: var(--text-primary);">📁 ${escapeHtml(data.folder.folder_name)}</h2>
+            <h2 style="margin-bottom: 1rem; color: var(--text-primary); font-family: 'Syne', sans-serif;">📁 ${escapeHtml(data.folder.folder_name)}</h2>
             <p style="margin-bottom: 1.5rem; color: var(--text-secondary);">Shared by ${escapeHtml(data.folder.username)}</p>
         `;
 

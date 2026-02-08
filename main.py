@@ -1201,6 +1201,92 @@ def delete_user(target_username):
     return jsonify({"msg": msg}), 400
 
 
+@app.route("/api/account/change-password", methods=["POST"])
+@jwt_required()
+def change_password():
+    username = get_jwt_identity()
+    data = request.get_json()
+    current_password = data.get("current_password", "")
+    new_password = data.get("new_password", "")
+
+    if not current_password or not new_password:
+        return jsonify({"msg": "All fields required"}), 400
+
+    if not user_manager.authenticate(username, current_password):
+        return jsonify({"msg": "Current password incorrect"}), 401
+
+    if len(new_password) < 6:
+        return jsonify({"msg": "New password must be at least 6 characters"}), 400
+
+    user_manager.users[username]["password_hash"] = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+    user_manager.save_users()
+
+    logger.info(f"Password changed for user: {username}")
+    return jsonify({"msg": "Password changed successfully"}), 200
+
+
+@app.route("/api/account/change-username", methods=["POST"])
+@jwt_required()
+def change_username():
+    old_username = get_jwt_identity()
+    data = request.get_json()
+    new_username = data.get("new_username", "").strip()
+    password = data.get("password", "")
+
+    if not new_username or not password:
+        return jsonify({"msg": "All fields required"}), 400
+
+    if not validate_username(new_username):
+        return jsonify({"msg": "Invalid username format"}), 400
+
+    if new_username in user_manager.users:
+        return jsonify({"msg": "Username already exists"}), 400
+
+    if not user_manager.authenticate(old_username, password):
+        return jsonify({"msg": "Password incorrect"}), 401
+
+    # Update username in users dict
+    user_data = user_manager.users[old_username]
+    del user_manager.users[old_username]
+    user_manager.users[new_username] = user_data
+    user_manager.save_users()
+
+    # Rename storage directory
+    old_dir = STORAGE_DIR / old_username
+    new_dir = STORAGE_DIR / new_username
+    if old_dir.exists():
+        old_dir.rename(new_dir)
+
+    # Update shared files
+    for entry in shared_manager.shared_files.get("pending", []):
+        if entry["username"] == old_username:
+            entry["username"] = new_username
+
+    for entry in shared_manager.shared_files.get("approved", []):
+        if entry["username"] == old_username:
+            entry["username"] = new_username
+
+    for entry in shared_manager.shared_files.get("pending_folders", []):
+        if entry["username"] == old_username:
+            entry["username"] = new_username
+
+    for entry in shared_manager.shared_files.get("folders", []):
+        if entry["username"] == old_username:
+            entry["username"] = new_username
+
+    shared_manager.save_shared_files()
+
+    # Generate new token
+    new_token = create_access_token(identity=new_username)
+
+    logger.info(f"Username changed from {old_username} to {new_username}")
+    return jsonify({
+        "msg": "Username changed successfully",
+        "access_token": new_token,
+        "new_username": new_username
+    }), 200
+
+
 if __name__ == "__main__":
     try:
         import PIL

@@ -9,9 +9,11 @@
 <body>
     <div id="navbar" style="display: none;">
         <div class="navbar">
-            <div class="navbar-brand"><span>🗄️</span> <span>Network Storage</span></div>
+            <div class="navbar-brand"><span>💾</span> <span>Network Storage</span></div>
             <div class="navbar-user">
-                <div class="user-badge"><span id="navUsername"></span><span id="navRole"></span></div>
+                <div class="user-badge" onclick="openSettings()" style="cursor: pointer;">
+                    <span id="navUsername"></span><span id="navRole"></span>
+                </div>
                 <button class="btn btn-secondary btn-small" onclick="logout()">Logout</button>
             </div>
         </div>
@@ -21,7 +23,7 @@
         <div class="card">
             <div id="alert" class="alert"></div>
             <div id="loginView">
-                <div class="card-header">Sign In</div>
+                <div class="card-header">Welcome Back</div>
                 <div class="form-group">
                     <label>Username</label>
                     <input type="text" id="loginUsername" placeholder="Enter username" autocomplete="username">
@@ -40,7 +42,7 @@
             </div>
 
             <div id="registerView" style="display: none;">
-                <div class="card-header">Register</div>
+                <div class="card-header">Create Account</div>
                 <div class="form-group">
                     <label>Username</label>
                     <input type="text" id="regUsername" placeholder="Choose username (3-32 characters)" autocomplete="username">
