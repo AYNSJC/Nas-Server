@@ -2,6 +2,9 @@ let token = localStorage.getItem('token');
 let currentUser = localStorage.getItem('username');
 let userRole = localStorage.getItem('role');
 let currentPath = '';
+let selectedFiles = new Set();
+let allFiles = [];
+let currentPreviewIndex = -1;
 
 // Theme management
 function initTheme() {
@@ -396,8 +399,143 @@ function showMainPanel() {
 /* =======================
    FILES & FOLDERS
    ======================= */
+function toggleFileSelection(filepath) {
+    if (selectedFiles.has(filepath)) {
+        selectedFiles.delete(filepath);
+    } else {
+        selectedFiles.add(filepath);
+    }
+    updateFileListUI();
+    updateBulkActionsBar();
+}
+
+function selectAllFiles() {
+    allFiles.forEach(file => selectedFiles.add(file.path));
+    updateFileListUI();
+    updateBulkActionsBar();
+}
+
+function clearSelection() {
+    selectedFiles.clear();
+    updateFileListUI();
+    updateBulkActionsBar();
+}
+
+function updateBulkActionsBar() {
+    const bar = document.getElementById('bulkActionsBar');
+    const count = document.getElementById('selectedCount');
+    
+    if (selectedFiles.size > 0) {
+        bar.style.display = 'flex';
+        count.textContent = selectedFiles.size;
+    } else {
+        bar.style.display = 'none';
+    }
+}
+
+function updateFileListUI() {
+    document.querySelectorAll('.file-checkbox').forEach(checkbox => {
+        const filepath = checkbox.dataset.filepath;
+        checkbox.checked = selectedFiles.has(filepath);
+        
+        const listItem = checkbox.closest('.list-item');
+        if (selectedFiles.has(filepath)) {
+            listItem.classList.add('selected');
+        } else {
+            listItem.classList.remove('selected');
+        }
+    });
+}
+
+async function bulkDeleteFiles() {
+    if (selectedFiles.size === 0) return;
+    
+    if (!confirm(`Delete ${selectedFiles.size} selected file(s)?`)) return;
+
+    try {
+        const res = await fetch('/api/bulk/delete', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify({ filepaths: Array.from(selectedFiles) })
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Bulk delete failed');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        clearSelection();
+        loadFiles(currentPath);
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+async function bulkMoveFiles() {
+    if (selectedFiles.size === 0) return;
+    
+    const destination = prompt('Enter destination folder path (leave empty for root):');
+    if (destination === null) return;
+
+    try {
+        const res = await fetch('/api/bulk/move', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify({ 
+                filepaths: Array.from(selectedFiles),
+                destination: destination.trim()
+            })
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Bulk move failed');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        clearSelection();
+        loadFiles(currentPath);
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+async function bulkShareFiles() {
+    if (selectedFiles.size === 0) return;
+    
+    if (!confirm(`Share ${selectedFiles.size} selected file(s) on the network?`)) return;
+
+    try {
+        const res = await fetch('/api/bulk/share', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify({ filepaths: Array.from(selectedFiles) })
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Bulk share failed');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        clearSelection();
+        loadFiles(currentPath);
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
 async function loadFiles(path = '') {
     currentPath = path || '';
+    selectedFiles.clear();
+    allFiles = [];
 
     try {
         const res = await fetch('/api/files?folder=' + encodeURIComponent(currentPath), {
@@ -440,21 +578,27 @@ async function loadFiles(path = '') {
 
         if (data.files && data.files.length > 0) {
             html += '<div class="section-header">Files</div>';
-            html += data.files.map(file => {
+            html += data.files.map((file, index) => {
                 const filePath = currentPath ? currentPath + '/' + file.name : file.name;
                 const canPreview = file.type !== 'other';
+                
+                allFiles.push({ path: filePath, type: file.type, name: file.name });
 
                 return `
                     <div class="list-item">
-                        <div class="item-info">
-                            <div class="item-name">
-                                ${getFileIcon(file.type)} ${escapeHtml(file.name)}
-                                ${file.is_shared ? '<span class="badge badge-shared">Shared</span>' : ''}
+                        <div class="item-info" style="display: flex; align-items: center; gap: 1rem;">
+                            <input type="checkbox" class="file-checkbox" data-filepath="${escapeHtml(filePath)}" 
+                                   onclick="toggleFileSelection('${escapeHtml(filePath)}'); event.stopPropagation();">
+                            <div>
+                                <div class="item-name">
+                                    ${getFileIcon(file.type)} ${escapeHtml(file.name)}
+                                    ${file.is_shared ? '<span class="badge badge-shared">Shared</span>' : ''}
+                                </div>
+                                <div class="item-meta">${file.size_formatted} • ${formatDate(file.modified)}</div>
                             </div>
-                            <div class="item-meta">${file.size_formatted} • ${formatDate(file.modified)}</div>
                         </div>
                         <div class="item-actions">
-                            ${canPreview ? `<button class="btn btn-secondary btn-small" onclick="previewFile('${escapeHtml(filePath)}')">Preview</button>` : ''}
+                            ${canPreview ? `<button class="btn btn-secondary btn-small" onclick="previewFile('${escapeHtml(filePath)}', ${index})">Preview</button>` : ''}
                             <button class="btn btn-primary btn-small" onclick="downloadFile('${escapeHtml(filePath)}')">Download</button>
                             ${!file.is_shared ? `<button class="btn btn-success btn-small" onclick="requestShare('${escapeHtml(filePath)}')">Share</button>` : ''}
                             <button class="btn btn-danger btn-small" onclick="deleteFile('${escapeHtml(filePath)}')">Delete</button>
@@ -469,6 +613,7 @@ async function loadFiles(path = '') {
         }
 
         fileListEl.innerHTML = html;
+        updateBulkActionsBar();
 
     } catch (e) {
         showMessage(e.message, 'error', 'mainAlert');
@@ -506,6 +651,8 @@ function getFileIcon(type) {
         'image': '🖼️',
         'pdf': '📄',
         'text': '📝',
+        'docx': '📘',
+        'xlsx': '📊',
         'other': '📎'
     };
     return icons[type] || '📎';
@@ -583,17 +730,39 @@ async function uploadFiles() {
     fileInput.value = '';
 }
 
-function previewFile(filepath) {
-    const previewUrl = `/api/preview/${encodeURIComponent(filepath)}?token=${token}`;
+function previewFile(filepath, index = -1) {
+    currentPreviewIndex = index;
+    
+    const file = allFiles[index];
+    let previewUrl;
+    
+    if (file && file.type === 'docx') {
+        previewUrl = `/api/preview/docx/${encodeURIComponent(filepath)}?token=${token}`;
+    } else if (file && file.type === 'xlsx') {
+        previewUrl = `/api/preview/xlsx/${encodeURIComponent(filepath)}?token=${token}`;
+    } else {
+        previewUrl = `/api/preview/${encodeURIComponent(filepath)}?token=${token}`;
+    }
 
     const modal = document.createElement('div');
     modal.className = 'preview-modal';
+    modal.id = 'previewModal';
     modal.onclick = (e) => {
         if (e.target === modal) modal.remove();
     };
 
     const content = document.createElement('div');
     content.className = 'preview-content';
+
+    const header = document.createElement('div');
+    header.className = 'preview-header';
+    header.innerHTML = `
+        <div class="preview-nav">
+            ${currentPreviewIndex > 0 ? '<button class="preview-nav-btn" onclick="navigatePreview(-1); event.stopPropagation();">← Previous</button>' : '<div></div>'}
+            <div class="preview-filename">${escapeHtml(file ? file.name : filepath.split('/').pop())}</div>
+            ${currentPreviewIndex < allFiles.length - 1 && currentPreviewIndex >= 0 ? '<button class="preview-nav-btn" onclick="navigatePreview(1); event.stopPropagation();">Next →</button>' : '<div></div>'}
+        </div>
+    `;
 
     const closeBtn = document.createElement('button');
     closeBtn.className = 'preview-close';
@@ -605,9 +774,21 @@ function previewFile(filepath) {
     iframe.className = 'preview-frame';
 
     content.appendChild(closeBtn);
+    content.appendChild(header);
     content.appendChild(iframe);
     modal.appendChild(content);
     document.body.appendChild(modal);
+}
+
+function navigatePreview(direction) {
+    const newIndex = currentPreviewIndex + direction;
+    if (newIndex >= 0 && newIndex < allFiles.length) {
+        const modal = document.getElementById('previewModal');
+        if (modal) modal.remove();
+        
+        const newFile = allFiles[newIndex];
+        previewFile(newFile.path, newIndex);
+    }
 }
 
 function downloadFile(filepath) {

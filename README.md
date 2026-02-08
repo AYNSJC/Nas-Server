@@ -1,69 +1,105 @@
-# Network Storage System - Improved Version
+# Network Storage System - Fixed DOCX/Excel Preview
 
-## Features Added
-1. **Modern Dark UI**: Beautiful gradient-based design with animations and smooth transitions
-2. **Account Settings**: Click on your username badge to access settings
-   - Change password
-   - Change username (requires password confirmation)
-3. **Auto-redirect on Login Failure**: Automatically returns to login page after failed login attempts
+## What's Fixed:
 
-## Installation
+### 1. DOCX Preview
+- ✅ Added proper dependency check for mammoth library
+- ✅ Shows friendly error message if mammoth is not installed
+- ✅ Added zoom controls (+, -, Reset) for better readability
+- ✅ Improved responsive design for mobile devices
+- ✅ Better error handling with user-friendly messages
 
-1. Install dependencies:
+### 2. Excel Preview  
+- ✅ Added proper dependency check for openpyxl library
+- ✅ Shows friendly error message if openpyxl is not installed
+- ✅ Added zoom controls (+, -, Reset) for better visibility
+- ✅ Multiple sheet tabs with clickable navigation
+- ✅ Sticky headers for easier scrolling
+- ✅ Responsive design optimized for mobile
+- ✅ Better error handling
+
+### 3. Zoom Controls
+Both DOCX and Excel previews now have:
+- **Zoom In** (+) - Increase view size up to 200%
+- **Zoom Out** (−) - Decrease view size down to 50%
+- **Reset** (⟲) - Return to 100% default view
+- **Current Zoom Level** displayed
+
+## Installation:
+
+1. Install required dependencies:
 ```bash
-pip install flask flask-jwt-extended flask-cors bcrypt Pillow
+pip install flask flask-jwt-extended flask-cors bcrypt Pillow mammoth openpyxl
 ```
 
-2. Create the directory structure:
-```bash
-mkdir -p static
-mv style.css static/
-mv app.js static/
-mv index.html static/
-```
-
-3. Run the application:
+2. Run the application:
 ```bash
 python app.py
 ```
 
-4. Access at: http://localhost:5000
+3. Access at: http://localhost:5000
 
-## Default Credentials
-- Username: admin
-- Password: admin123
+## Default Credentials:
+- Username: `admin`
+- Password: `admin123`
 
-⚠️ **IMPORTANT**: Change the admin password after first login!
+**⚠️ IMPORTANT: Change the admin password immediately after first login!**
 
-## File Structure
+## File Structure:
 ```
-nas_system/
-├── app.py          # Flask backend with new API endpoints
+your-project/
+├── app.py              # Main Flask application (UPDATED with zoom controls)
 ├── static/
-│   ├── index.html  # Main HTML with settings modal
-│   ├── style.css   # Modern dark theme with animations
-│   └── app.js      # Frontend logic with settings functionality
-├── nas_storage/    # User file storage (created on run)
-├── users.json      # User database (created on run)
-└── shared_files.json  # Shared files database (created on run)
+│   ├── index.html     # Same as before
+│   ├── style.css      # Same as before  
+│   └── app.js         # Same as before
+├── nas_storage/       # Created automatically for user files
+├── logs/              # Created automatically for logs
+├── users.json         # Created automatically for user data
+└── shared_files.json  # Created automatically for shared files
 ```
 
-## New Features
+## What Changed:
 
-### Account Settings
-- Click on your username badge in the navbar to open settings
-- Change password with current password verification
-- Change username with password confirmation
-- View account information
+### app.py Updates:
+1. **DOCX Preview** (`/api/preview/docx/<path:filepath>`):
+   - Checks if mammoth is available before attempting preview
+   - Returns helpful error page if library missing
+   - Added floating zoom controls with smooth animations
+   - Improved CSS styling for better readability
+   - Mobile-responsive design
 
-### UI Improvements
-- Dark theme with gradient accents
-- Smooth animations and transitions
-- Better typography with Syne and DM Sans fonts
-- Floating animations and glow effects
-- Responsive design for mobile devices
+2. **Excel Preview** (`/api/preview/xlsx/<path:filepath>`):
+   - Checks if openpyxl is available before attempting preview
+   - Returns helpful error page if library missing
+   - Added floating zoom controls
+   - Fixed sheet tab navigation
+   - Better table styling with sticky headers
+   - Mobile-responsive design
 
-### Security Features
-- JWT token refresh on username change
-- Password verification for sensitive operations
-- Automatic logout redirect on auth failure
+## Features:
+- ✅ User authentication with JWT
+- ✅ File upload/download with multiple formats
+- ✅ Folder management (create, delete, navigate)
+- ✅ File preview (images, PDF, text, DOCX, Excel)
+- ✅ **NEW**: Zoom controls for DOCX and Excel previews
+- ✅ Network file sharing with admin approval
+- ✅ Bulk operations (delete, move, share)
+- ✅ User management (admin only)
+- ✅ Theme toggle (light/dark mode)
+- ✅ Responsive design
+
+## Testing the Fix:
+
+1. Upload a DOCX file
+2. Click "Preview" button
+3. You should see zoom controls in the top-right corner
+4. Try zooming in/out to verify the file is readable
+
+Same for Excel files!
+
+## Notes:
+- The zoom controls are fixed positioned and stay visible while scrolling
+- Zoom range: 50% - 200% in 10% increments
+- Mobile optimized with smaller buttons and adjusted positioning
+- If libraries are missing, users get clear installation instructions

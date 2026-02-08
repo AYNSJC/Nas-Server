@@ -8,6 +8,20 @@ from werkzeug.utils import secure_filename
 from PIL import Image
 import io
 
+try:
+    import mammoth
+    MAMMOTH_AVAILABLE = True
+except ImportError:
+    MAMMOTH_AVAILABLE = False
+    print("⚠️  mammoth not installed - DOCX preview disabled. Run: pip install mammoth")
+
+try:
+    import openpyxl
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
+    print("⚠️  openpyxl not installed - Excel preview disabled. Run: pip install openpyxl")
+
 BASE_DIR = Path(__file__).parent
 STORAGE_DIR = BASE_DIR / "nas_storage"
 USERS_FILE = BASE_DIR / "users.json"
@@ -38,6 +52,8 @@ PREVIEWABLE_TYPES = {
     'image': {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg'},
     'pdf': {'pdf'},
     'text': {'txt', 'md', 'json', 'xml', 'csv', 'log'},
+    'docx': {'docx'},
+    'xlsx': {'xlsx', 'xls'},
 }
 
 
@@ -1099,6 +1115,579 @@ def delete_file(filepath):
         return jsonify({"msg": "Delete failed"}), 500
 
 
+@app.route("/api/bulk/delete", methods=["POST"])
+@jwt_required()
+def bulk_delete_files():
+    username = get_jwt_identity()
+    data = request.get_json()
+    filepaths = data.get('filepaths', [])
+
+    if not filepaths:
+        return jsonify({"msg": "No files specified"}), 400
+
+    user_dir = STORAGE_DIR / username
+    deleted = []
+    errors = []
+
+    for filepath in filepaths:
+        filepath = validate_path(username, filepath)
+        file_path = user_dir / filepath
+
+        try:
+            file_path.resolve().relative_to(user_dir.resolve())
+            if file_path.exists() and file_path.is_file():
+                file_path.unlink()
+                deleted.append(filepath)
+                logger.info(f"Bulk delete: {username}/{filepath}")
+            else:
+                errors.append(filepath)
+        except Exception as e:
+            logger.error(f"Bulk delete error for {username}/{filepath}: {str(e)}")
+            errors.append(filepath)
+
+    user_manager.update_storage_used(username)
+
+    msg = f"Deleted {len(deleted)} file(s)"
+    if errors:
+        msg += f". {len(errors)} failed"
+
+    return jsonify({"msg": msg, "deleted": deleted, "errors": errors}), 200
+
+
+@app.route("/api/bulk/move", methods=["POST"])
+@jwt_required()
+def bulk_move_files():
+    username = get_jwt_identity()
+    data = request.get_json()
+    filepaths = data.get('filepaths', [])
+    destination = data.get('destination', '').strip()
+
+    if not filepaths:
+        return jsonify({"msg": "No files specified"}), 400
+
+    destination = validate_path(username, destination)
+    user_dir = STORAGE_DIR / username
+    dest_dir = user_dir / destination if destination else user_dir
+
+    if not dest_dir.exists():
+        return jsonify({"msg": "Destination folder not found"}), 404
+
+    moved = []
+    errors = []
+
+    for filepath in filepaths:
+        filepath = validate_path(username, filepath)
+        file_path = user_dir / filepath
+
+        try:
+            file_path.resolve().relative_to(user_dir.resolve())
+            if file_path.exists() and file_path.is_file():
+                dest_path = dest_dir / file_path.name
+                
+                # Handle name conflicts
+                if dest_path.exists():
+                    name, ext = os.path.splitext(file_path.name)
+                    counter = 1
+                    while dest_path.exists():
+                        dest_path = dest_dir / f"{name}_{counter}{ext}"
+                        counter += 1
+                
+                shutil.move(str(file_path), str(dest_path))
+                moved.append(filepath)
+                logger.info(f"Bulk move: {username}/{filepath} -> {destination}")
+            else:
+                errors.append(filepath)
+        except Exception as e:
+            logger.error(f"Bulk move error for {username}/{filepath}: {str(e)}")
+            errors.append(filepath)
+
+    msg = f"Moved {len(moved)} file(s)"
+    if errors:
+        msg += f". {len(errors)} failed"
+
+    return jsonify({"msg": msg, "moved": moved, "errors": errors}), 200
+
+
+@app.route("/api/bulk/share", methods=["POST"])
+@jwt_required()
+def bulk_share_files():
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+    data = request.get_json()
+    filepaths = data.get('filepaths', [])
+
+    if not filepaths:
+        return jsonify({"msg": "No files specified"}), 400
+
+    user_dir = STORAGE_DIR / username
+    shared = []
+    errors = []
+
+    for filepath in filepaths:
+        filepath = validate_path(username, filepath)
+        file_path = user_dir / filepath
+
+        try:
+            file_path.resolve().relative_to(user_dir.resolve())
+            if file_path.exists() and file_path.is_file():
+                stat = file_path.stat()
+                file_id = shared_manager.request_share(
+                    username,
+                    filepath,
+                    file_path.name,
+                    stat.st_size,
+                    get_file_type(file_path.name)
+                )
+                
+                # Auto-approve if admin
+                if user["role"] == "admin":
+                    shared_manager.approve_share(file_id)
+                
+                shared.append(filepath)
+                logger.info(f"Bulk share: {username}/{filepath}")
+            else:
+                errors.append(filepath)
+        except Exception as e:
+            logger.error(f"Bulk share error for {username}/{filepath}: {str(e)}")
+            errors.append(filepath)
+
+    msg = f"Shared {len(shared)} file(s)"
+    if errors:
+        msg += f". {len(errors)} failed"
+
+    return jsonify({"msg": msg, "shared": shared, "errors": errors}), 200
+
+
+@app.route("/api/preview/docx/<path:filepath>", methods=["GET"])
+def preview_docx(filepath):
+    if not MAMMOTH_AVAILABLE:
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset="UTF-8"></head>
+        <body style="font-family: Arial; padding: 40px; text-align: center;">
+            <h2>⚠️ DOCX Preview Unavailable</h2>
+            <p>The mammoth library is not installed.</p>
+            <p>Run: <code>pip install mammoth</code></p>
+        </body>
+        </html>
+        """, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+    token = request.args.get('token')
+    if not token:
+        return jsonify({"msg": "No token provided"}), 401
+
+    try:
+        from flask_jwt_extended import decode_token
+        decoded = decode_token(token)
+        username = decoded['sub']
+    except Exception:
+        return jsonify({"msg": "Invalid token"}), 401
+
+    filepath = validate_path(username, filepath)
+    user_dir = STORAGE_DIR / username
+    file_path = user_dir / filepath
+
+    try:
+        file_path.resolve().relative_to(user_dir.resolve())
+    except ValueError:
+        return jsonify({"msg": "Access denied"}), 403
+
+    if not file_path.exists():
+        return jsonify({"msg": "File not found"}), 404
+
+    try:
+        import mammoth
+        with open(file_path, "rb") as docx_file:
+            result = mammoth.convert_to_html(docx_file)
+            html = result.value
+            
+        html_output = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+                body {{ 
+                    font-family: 'Calibri', 'Arial', sans-serif; 
+                    padding: 60px 40px 40px 40px;
+                    max-width: 800px; 
+                    margin: 0 auto;
+                    background: #fff;
+                    color: #000;
+                    transform-origin: top center;
+                    transition: transform 0.2s ease;
+                }}
+                img {{ max-width: 100%; height: auto; }}
+                .zoom-controls {{
+                    position: fixed;
+                    top: 15px;
+                    right: 15px;
+                    background: rgba(0, 0, 0, 0.85);
+                    padding: 12px;
+                    border-radius: 10px;
+                    display: flex;
+                    gap: 8px;
+                    z-index: 1000;
+                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+                    align-items: center;
+                }}
+                .zoom-btn {{
+                    background: #4CAF50;
+                    color: white;
+                    border: none;
+                    padding: 10px 16px;
+                    border-radius: 6px;
+                    cursor: pointer;
+                    font-size: 18px;
+                    font-weight: bold;
+                    transition: all 0.2s ease;
+                    min-width: 40px;
+                }}
+                .zoom-btn:hover {{
+                    background: #45a049;
+                    transform: translateY(-2px);
+                    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+                }}
+                .zoom-btn:active {{
+                    transform: translateY(0);
+                }}
+                .zoom-level {{
+                    color: white;
+                    padding: 8px 12px;
+                    font-weight: bold;
+                    font-size: 16px;
+                    min-width: 60px;
+                    text-align: center;
+                }}
+                @media (max-width: 768px) {{
+                    body {{ padding: 80px 20px 20px 20px; }}
+                    .zoom-controls {{
+                        top: 10px;
+                        right: 10px;
+                        padding: 8px;
+                        gap: 6px;
+                    }}
+                    .zoom-btn {{ padding: 8px 12px; font-size: 16px; }}
+                    .zoom-level {{ font-size: 14px; min-width: 50px; }}
+                }}
+            </style>
+            <script>
+                let zoom = 100;
+                function updateZoom() {{
+                    document.body.style.transform = 'scale(' + (zoom / 100) + ')';
+                    document.getElementById('zoomLevel').textContent = zoom + '%';
+                }}
+                function zoomIn() {{
+                    if (zoom < 200) {{
+                        zoom += 10;
+                        updateZoom();
+                    }}
+                }}
+                function zoomOut() {{
+                    if (zoom > 50) {{
+                        zoom -= 10;
+                        updateZoom();
+                    }}
+                }}
+                function resetZoom() {{
+                    zoom = 100;
+                    updateZoom();
+                }}
+            </script>
+        </head>
+        <body>
+            <div class="zoom-controls">
+                <button class="zoom-btn" onclick="zoomOut()" title="Zoom Out">−</button>
+                <span class="zoom-level" id="zoomLevel">100%</span>
+                <button class="zoom-btn" onclick="zoomIn()" title="Zoom In">+</button>
+                <button class="zoom-btn" onclick="resetZoom()" title="Reset Zoom">⟲</button>
+            </div>
+            <div class="content">
+                {html}
+            </div>
+        </body>
+        </html>
+        """
+        return html_output, 200, {'Content-Type': 'text/html; charset=utf-8'}
+    except Exception as e:
+        logger.error(f"DOCX preview error: {str(e)}")
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset="UTF-8"></head>
+        <body style="font-family: Arial; padding: 40px; text-align: center;">
+            <h2>⚠️ Preview Error</h2>
+            <p>Failed to preview DOCX file: {str(e)}</p>
+        </body>
+        </html>
+        """, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
+@app.route("/api/preview/xlsx/<path:filepath>", methods=["GET"])
+def preview_xlsx(filepath):
+    if not OPENPYXL_AVAILABLE:
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset="UTF-8"></head>
+        <body style="font-family: Arial; padding: 40px; text-align: center;">
+            <h2>⚠️ Excel Preview Unavailable</h2>
+            <p>The openpyxl library is not installed.</p>
+            <p>Run: <code>pip install openpyxl</code></p>
+        </body>
+        </html>
+        """, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+    token = request.args.get('token')
+    if not token:
+        return jsonify({"msg": "No token provided"}), 401
+
+    try:
+        from flask_jwt_extended import decode_token
+        decoded = decode_token(token)
+        username = decoded['sub']
+    except Exception:
+        return jsonify({"msg": "Invalid token"}), 401
+
+    filepath = validate_path(username, filepath)
+    user_dir = STORAGE_DIR / username
+    file_path = user_dir / filepath
+
+    try:
+        file_path.resolve().relative_to(user_dir.resolve())
+    except ValueError:
+        return jsonify({"msg": "Access denied"}), 403
+
+    if not file_path.exists():
+        return jsonify({"msg": "File not found"}), 404
+
+    try:
+        import openpyxl
+        from openpyxl.utils import get_column_letter
+        
+        wb = openpyxl.load_workbook(file_path, data_only=True)
+        
+        html_parts = ['<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>']
+        html_parts.append("""
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { 
+                font-family: 'Calibri', 'Arial', sans-serif; 
+                padding: 20px; 
+                background: #f5f5f5;
+                transform-origin: top left;
+                transition: transform 0.2s ease;
+            }
+            .zoom-controls {
+                position: fixed;
+                top: 15px;
+                right: 15px;
+                background: rgba(0, 0, 0, 0.85);
+                padding: 12px;
+                border-radius: 10px;
+                display: flex;
+                gap: 8px;
+                z-index: 1000;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+                align-items: center;
+            }
+            .zoom-btn {
+                background: #4CAF50;
+                color: white;
+                border: none;
+                padding: 10px 16px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 18px;
+                font-weight: bold;
+                transition: all 0.2s ease;
+                min-width: 40px;
+            }
+            .zoom-btn:hover {
+                background: #45a049;
+                transform: translateY(-2px);
+                box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+            }
+            .zoom-btn:active {
+                transform: translateY(0);
+            }
+            .zoom-level {
+                color: white;
+                padding: 8px 12px;
+                font-weight: bold;
+                font-size: 16px;
+                min-width: 60px;
+                text-align: center;
+            }
+            .sheet-tabs {
+                margin-bottom: 20px;
+                border-bottom: 2px solid #ddd;
+                background: white;
+                padding: 10px;
+                border-radius: 8px 8px 0 0;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            .sheet-tab {
+                display: inline-block;
+                padding: 10px 20px;
+                margin-right: 5px;
+                background: #f5f5f5;
+                border: 1px solid #ddd;
+                border-bottom: none;
+                cursor: pointer;
+                border-radius: 5px 5px 0 0;
+                transition: all 0.2s ease;
+                font-weight: 600;
+            }
+            .sheet-tab:hover {
+                background: #e8e8e8;
+            }
+            .sheet-tab.active {
+                background: #4CAF50;
+                color: white;
+                font-weight: bold;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            }
+            .sheet-content {
+                display: none;
+                background: white;
+                padding: 20px;
+                border-radius: 0 0 8px 8px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                overflow-x: auto;
+            }
+            .sheet-content.active {
+                display: block;
+            }
+            table { 
+                border-collapse: collapse; 
+                width: 100%; 
+                background: white;
+                font-size: 14px;
+            }
+            th, td { 
+                border: 1px solid #ddd; 
+                padding: 10px 12px; 
+                text-align: left;
+                white-space: nowrap;
+            }
+            th { 
+                background-color: #4CAF50; 
+                color: white; 
+                font-weight: bold;
+                position: sticky;
+                top: 0;
+                z-index: 10;
+            }
+            tr:nth-child(even) { background-color: #f9f9f9; }
+            tr:hover { background-color: #f0f0f0; }
+            h2 {
+                color: #333;
+                margin-bottom: 15px;
+                font-size: 24px;
+            }
+            @media (max-width: 768px) {
+                body { padding: 15px; }
+                .zoom-controls {
+                    top: 10px;
+                    right: 10px;
+                    padding: 8px;
+                    gap: 6px;
+                }
+                .zoom-btn { padding: 8px 12px; font-size: 16px; }
+                .zoom-level { font-size: 14px; min-width: 50px; }
+                th, td { padding: 8px; font-size: 12px; }
+                .sheet-tab { padding: 8px 12px; font-size: 13px; }
+            }
+        </style>
+        <script>
+            let zoom = 100;
+            function updateZoom() {
+                document.body.style.transform = 'scale(' + (zoom / 100) + ')';
+                document.getElementById('zoomLevel').textContent = zoom + '%';
+            }
+            function zoomIn() {
+                if (zoom < 200) {
+                    zoom += 10;
+                    updateZoom();
+                }
+            }
+            function zoomOut() {
+                if (zoom > 50) {
+                    zoom -= 10;
+                    updateZoom();
+                }
+            }
+            function resetZoom() {
+                zoom = 100;
+                updateZoom();
+            }
+            function showSheet(sheetName) {
+                document.querySelectorAll('.sheet-content').forEach(s => s.classList.remove('active'));
+                document.querySelectorAll('.sheet-tab').forEach(t => t.classList.remove('active'));
+                document.getElementById('sheet-' + sheetName).classList.add('active');
+                document.getElementById('tab-' + sheetName).classList.add('active');
+            }
+        </script>
+        </head><body>
+        <div class="zoom-controls">
+            <button class="zoom-btn" onclick="zoomOut()" title="Zoom Out">−</button>
+            <span class="zoom-level" id="zoomLevel">100%</span>
+            <button class="zoom-btn" onclick="zoomIn()" title="Zoom In">+</button>
+            <button class="zoom-btn" onclick="resetZoom()" title="Reset Zoom">⟲</button>
+        </div>
+        """)
+        
+        # Add tabs
+        html_parts.append('<div class="sheet-tabs">')
+        for idx, sheet_name in enumerate(wb.sheetnames):
+            active_class = 'active' if idx == 0 else ''
+            safe_name = sheet_name.replace("'", "\\'")
+            html_parts.append(f'<div class="sheet-tab {active_class}" id="tab-{idx}" onclick="showSheet({idx})">{sheet_name}</div>')
+        html_parts.append('</div>')
+        
+        # Add sheet contents
+        for idx, sheet_name in enumerate(wb.sheetnames):
+            ws = wb[sheet_name]
+            active_class = 'active' if idx == 0 else ''
+            html_parts.append(f'<div class="sheet-content {active_class}" id="sheet-{idx}">')
+            html_parts.append(f'<h2>{sheet_name}</h2>')
+            html_parts.append('<table>')
+            
+            for row_idx, row in enumerate(ws.iter_rows(max_row=min(100, ws.max_row)), 1):
+                html_parts.append('<tr>')
+                for cell in row:
+                    value = cell.value if cell.value is not None else ''
+                    # Escape HTML
+                    value = str(value).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    tag = 'th' if row_idx == 1 else 'td'
+                    html_parts.append(f'<{tag}>{value}</{tag}>')
+                html_parts.append('</tr>')
+            
+            if ws.max_row > 100:
+                html_parts.append(f'<tr><td colspan="{ws.max_column}"><em>... showing first 100 rows of {ws.max_row}</em></td></tr>')
+            
+            html_parts.append('</table></div>')
+        
+        html_parts.append('</body></html>')
+        
+        return ''.join(html_parts), 200, {'Content-Type': 'text/html; charset=utf-8'}
+    except Exception as e:
+        logger.error(f"XLSX preview error: {str(e)}")
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset="UTF-8"></head>
+        <body style="font-family: Arial; padding: 40px; text-align: center;">
+            <h2>⚠️ Preview Error</h2>
+            <p>Failed to preview Excel file: {str(e)}</p>
+        </body>
+        </html>
+        """, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
 @app.route("/api/users", methods=["GET"])
 @jwt_required()
 def get_users():
@@ -1290,7 +1879,6 @@ def change_username():
 if __name__ == "__main__":
     try:
         import PIL
-
         print("✓ Pillow installed - image preview enabled")
     except ImportError:
         print("⚠️  Pillow not installed - run: pip install Pillow")

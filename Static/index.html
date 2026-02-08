@@ -105,6 +105,19 @@
                 </div>
             </div>
 
+            <div class="bulk-actions-bar" id="bulkActionsBar" style="display: none;">
+                <div class="bulk-actions-info">
+                    <span id="selectedCount">0</span> file(s) selected
+                </div>
+                <div class="bulk-actions-buttons">
+                    <button class="btn btn-secondary btn-small" onclick="selectAllFiles()">Select All</button>
+                    <button class="btn btn-secondary btn-small" onclick="clearSelection()">Clear</button>
+                    <button class="btn btn-primary btn-small" onclick="bulkMoveFiles()">Move</button>
+                    <button class="btn btn-success btn-small" onclick="bulkShareFiles()">Share</button>
+                    <button class="btn btn-danger btn-small" onclick="bulkDeleteFiles()">Delete</button>
+                </div>
+            </div>
+
             <div id="fileList"></div>
         </div>
 
