@@ -1,10 +1,12 @@
 from flask import Flask, request, jsonify, send_from_directory, send_file
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_cors import CORS
-import bcrypt, json, os, shutil, logging, secrets, re
+import bcrypt, json, os, shutil, logging, secrets, re, mimetypes
 from pathlib import Path
 from datetime import datetime, timedelta
 from werkzeug.utils import secure_filename
+from PIL import Image
+import io
 
 BASE_DIR = Path(__file__).parent
 STORAGE_DIR = BASE_DIR / "nas_storage"
@@ -22,12 +24,19 @@ MAX_FILE_SIZE = 500 * 1024 * 1024
 ALLOWED_EXTENSIONS = {
     'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'doc', 'docx',
     'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'rar', '7z', 'mp3',
-    'mp4', 'avi', 'mkv', 'csv', 'json', 'xml', 'md', 'bmp', 'svg'
+    'mp4', 'avi', 'mkv', 'csv', 'json', 'xml', 'md', 'bmp', 'svg',
+    'webp', 'ico', 'tiff', 'odt', 'ods', 'odp'
 }
 
 DANGEROUS_EXTENSIONS = {
     'exe', 'bat', 'cmd', 'com', 'pif', 'scr', 'vbs', 'js',
     'jar', 'msi', 'app', 'deb', 'rpm', 'sh', 'ps1', 'dll', 'so'
+}
+
+PREVIEWABLE_TYPES = {
+    'image': {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg'},
+    'pdf': {'pdf'},
+    'text': {'txt', 'md', 'json', 'xml', 'csv', 'log'},
 }
 
 
@@ -40,10 +49,34 @@ def allowed_file(filename):
     return ext in ALLOWED_EXTENSIONS
 
 
+def get_file_type(filename):
+    if '.' not in filename:
+        return 'unknown'
+    ext = filename.rsplit('.', 1)[1].lower()
+    for file_type, extensions in PREVIEWABLE_TYPES.items():
+        if ext in extensions:
+            return file_type
+    return 'other'
+
+
 def validate_username(username):
     if not username or len(username) < 3 or len(username) > 32:
         return False
     return bool(re.match(r'^[a-zA-Z0-9_]+$', username))
+
+
+def validate_path(username, path):
+    """Validate and sanitize path to prevent directory traversal"""
+    if not path:
+        return ""
+
+    # Remove leading/trailing slashes and dots
+    path = path.strip().strip('/').strip('.')
+
+    # Split and sanitize each component
+    components = [secure_filename(p) for p in path.split('/') if p and p != '..']
+
+    return '/'.join(components)
 
 
 class UserManager:
@@ -253,8 +286,16 @@ def login():
 @jwt_required()
 def upload_files():
     username = get_jwt_identity()
+    folder_path = request.form.get('folder', '').strip()
+    folder_path = validate_path(username, folder_path)
+
     user_dir = STORAGE_DIR / username
-    user_dir.mkdir(exist_ok=True)
+    if folder_path:
+        target_dir = user_dir / folder_path
+    else:
+        target_dir = user_dir
+
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     if 'files' not in request.files:
         return jsonify({"msg": "No files provided"}), 400
@@ -272,20 +313,20 @@ def upload_files():
             continue
 
         filename = secure_filename(file.filename)
-        filepath = user_dir / filename
+        filepath = target_dir / filename
 
         if filepath.exists():
             name, ext = os.path.splitext(filename)
             counter = 1
             while filepath.exists():
                 filename = f"{name}_{counter}{ext}"
-                filepath = user_dir / filename
+                filepath = target_dir / filename
                 counter += 1
 
         try:
             file.save(str(filepath))
             uploaded.append(filename)
-            logger.info(f"File uploaded: {username}/{filename}")
+            logger.info(f"File uploaded: {username}/{folder_path}/{filename}")
         except Exception as e:
             logger.error(f"Upload error for {username}/{filename}: {str(e)}")
             errors.append(f"{file.filename}: Upload failed")
@@ -305,42 +346,127 @@ def upload_files():
 @jwt_required()
 def list_files():
     username = get_jwt_identity()
-    user_dir = STORAGE_DIR / username
+    folder_path = request.args.get('folder', '').strip()
+    folder_path = validate_path(username, folder_path)
 
-    if not user_dir.exists():
+    user_dir = STORAGE_DIR / username
+    if folder_path:
+        target_dir = user_dir / folder_path
+    else:
+        target_dir = user_dir
+
+    if not target_dir.exists():
         return jsonify({
             "files": [],
+            "folders": [],
+            "current_path": folder_path,
             "total_files": 0,
             "total_size": 0,
             "total_size_formatted": "0 B"
         }), 200
 
     files = []
+    folders = []
     total_size = 0
 
-    for file_path in user_dir.iterdir():
-        if file_path.is_file():
-            stat = file_path.stat()
+    for item in target_dir.iterdir():
+        if item.is_file():
+            stat = item.stat()
+            ext = item.suffix[1:].lower() if item.suffix else ''
             files.append({
-                "name": file_path.name,
+                "name": item.name,
                 "size": stat.st_size,
                 "size_formatted": format_size(stat.st_size),
-                "modified": stat.st_mtime
+                "modified": stat.st_mtime,
+                "type": get_file_type(item.name),
+                "ext": ext
             })
             total_size += stat.st_size
+        elif item.is_dir():
+            stat = item.stat()
+            folders.append({
+                "name": item.name,
+                "modified": stat.st_mtime
+            })
 
     files.sort(key=lambda x: x["modified"], reverse=True)
+    folders.sort(key=lambda x: x["name"])
 
     return jsonify({
         "files": files,
+        "folders": folders,
+        "current_path": folder_path,
         "total_files": len(files),
         "total_size": total_size,
         "total_size_formatted": format_size(total_size)
     }), 200
 
 
-@app.route("/api/download/<filename>", methods=["GET"])
-def download_file(filename):
+@app.route("/api/folder/create", methods=["POST"])
+@jwt_required()
+def create_folder():
+    username = get_jwt_identity()
+    data = request.get_json()
+    current_path = data.get('current_path', '').strip()
+    folder_name = data.get('folder_name', '').strip()
+
+    if not folder_name:
+        return jsonify({"msg": "Folder name required"}), 400
+
+    current_path = validate_path(username, current_path)
+    folder_name = secure_filename(folder_name)
+
+    user_dir = STORAGE_DIR / username
+    if current_path:
+        target_dir = user_dir / current_path / folder_name
+    else:
+        target_dir = user_dir / folder_name
+
+    if target_dir.exists():
+        return jsonify({"msg": "Folder already exists"}), 400
+
+    try:
+        target_dir.mkdir(parents=True, exist_ok=False)
+        logger.info(f"Folder created: {username}/{current_path}/{folder_name}")
+        return jsonify({"msg": "Folder created successfully"}), 200
+    except Exception as e:
+        logger.error(f"Folder creation error: {str(e)}")
+        return jsonify({"msg": "Failed to create folder"}), 500
+
+
+@app.route("/api/folder/delete", methods=["DELETE"])
+@jwt_required()
+def delete_folder():
+    username = get_jwt_identity()
+    folder_path = request.args.get('path', '').strip()
+    folder_path = validate_path(username, folder_path)
+
+    if not folder_path:
+        return jsonify({"msg": "Invalid folder path"}), 400
+
+    user_dir = STORAGE_DIR / username
+    target_dir = user_dir / folder_path
+
+    try:
+        target_dir.resolve().relative_to(user_dir.resolve())
+    except ValueError:
+        return jsonify({"msg": "Access denied"}), 403
+
+    if not target_dir.exists() or not target_dir.is_dir():
+        return jsonify({"msg": "Folder not found"}), 404
+
+    try:
+        shutil.rmtree(target_dir)
+        user_manager.update_storage_used(username)
+        logger.info(f"Folder deleted: {username}/{folder_path}")
+        return jsonify({"msg": "Folder deleted successfully"}), 200
+    except Exception as e:
+        logger.error(f"Folder deletion error: {str(e)}")
+        return jsonify({"msg": "Failed to delete folder"}), 500
+
+
+@app.route("/api/preview/<path:filepath>", methods=["GET"])
+def preview_file(filepath):
     token = request.args.get('token')
     if not token:
         return jsonify({"msg": "No token provided"}), 401
@@ -352,35 +478,84 @@ def download_file(filename):
     except Exception:
         return jsonify({"msg": "Invalid token"}), 401
 
-    safe_filename = secure_filename(filename)
+    filepath = validate_path(username, filepath)
     user_dir = STORAGE_DIR / username
-    file_path = user_dir / safe_filename
+    file_path = user_dir / filepath
 
     try:
         file_path.resolve().relative_to(user_dir.resolve())
     except ValueError:
-        logger.warning(f"Path traversal attempt by {username}: {filename}")
         return jsonify({"msg": "Access denied"}), 403
 
     if not file_path.exists():
         return jsonify({"msg": "File not found"}), 404
 
-    logger.info(f"File downloaded: {username}/{safe_filename}")
-    return send_from_directory(user_dir, safe_filename, as_attachment=True)
+    file_type = get_file_type(file_path.name)
+
+    if file_type == 'image':
+        # Optimize image for preview
+        try:
+            img = Image.open(file_path)
+            img.thumbnail((1920, 1080), Image.Resampling.LANCZOS)
+            img_io = io.BytesIO()
+            img.save(img_io, format=img.format or 'PNG')
+            img_io.seek(0)
+            return send_file(img_io, mimetype=f'image/{img.format.lower()}')
+        except:
+            return send_file(file_path, mimetype=mimetypes.guess_type(file_path)[0])
+
+    elif file_type == 'pdf':
+        return send_file(file_path, mimetype='application/pdf')
+
+    elif file_type == 'text':
+        return send_file(file_path, mimetype='text/plain')
+
+    else:
+        return jsonify({"msg": "Preview not available for this file type"}), 400
 
 
-@app.route("/api/delete/<filename>", methods=["DELETE"])
-@jwt_required()
-def delete_file(filename):
-    username = get_jwt_identity()
-    safe_filename = secure_filename(filename)
+@app.route("/api/download/<path:filepath>", methods=["GET"])
+def download_file(filepath):
+    token = request.args.get('token')
+    if not token:
+        return jsonify({"msg": "No token provided"}), 401
+
+    try:
+        from flask_jwt_extended import decode_token
+        decoded = decode_token(token)
+        username = decoded['sub']
+    except Exception:
+        return jsonify({"msg": "Invalid token"}), 401
+
+    filepath = validate_path(username, filepath)
     user_dir = STORAGE_DIR / username
-    file_path = user_dir / safe_filename
+    file_path = user_dir / filepath
 
     try:
         file_path.resolve().relative_to(user_dir.resolve())
     except ValueError:
-        logger.warning(f"Path traversal attempt by {username}: {filename}")
+        logger.warning(f"Path traversal attempt by {username}: {filepath}")
+        return jsonify({"msg": "Access denied"}), 403
+
+    if not file_path.exists():
+        return jsonify({"msg": "File not found"}), 404
+
+    logger.info(f"File downloaded: {username}/{filepath}")
+    return send_file(file_path, as_attachment=True, download_name=file_path.name)
+
+
+@app.route("/api/delete/<path:filepath>", methods=["DELETE"])
+@jwt_required()
+def delete_file(filepath):
+    username = get_jwt_identity()
+    filepath = validate_path(username, filepath)
+    user_dir = STORAGE_DIR / username
+    file_path = user_dir / filepath
+
+    try:
+        file_path.resolve().relative_to(user_dir.resolve())
+    except ValueError:
+        logger.warning(f"Path traversal attempt by {username}: {filepath}")
         return jsonify({"msg": "Access denied"}), 403
 
     if not file_path.exists():
@@ -389,10 +564,10 @@ def delete_file(filename):
     try:
         file_path.unlink()
         user_manager.update_storage_used(username)
-        logger.info(f"File deleted: {username}/{safe_filename}")
+        logger.info(f"File deleted: {username}/{filepath}")
         return jsonify({"msg": "File deleted"}), 200
     except Exception as e:
-        logger.error(f"Delete error for {username}/{safe_filename}: {str(e)}")
+        logger.error(f"Delete error for {username}/{filepath}: {str(e)}")
         return jsonify({"msg": "Delete failed"}), 500
 
 
@@ -499,11 +674,13 @@ def delete_user(target_username):
 
 
 if __name__ == "__main__":
-    # Create index.html if it doesn't exist
-    index_file = STATIC_DIR / "index.html"
-    if not index_file.exists():
-        print("⚠️  Creating static/index.html - you need to create this file!")
-        print("📝 See next message for HTML content")
+    # Check for PIL/Pillow
+    try:
+        import PIL
+
+        print("✓ Pillow installed - image preview enabled")
+    except ImportError:
+        print("⚠️  Pillow not installed - run: pip install Pillow")
 
     print("\n" + "=" * 60)
     print("📦 NAS SYSTEM STARTED")

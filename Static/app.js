@@ -1,6 +1,7 @@
 let token = localStorage.getItem('token');
 let currentUser = localStorage.getItem('username');
 let userRole = localStorage.getItem('role');
+let currentPath = '';
 
 console.log('App initialized. Token exists:', !!token);
 
@@ -39,16 +40,28 @@ function showRegister() {
     document.getElementById('registerView').style.display = 'block';
 }
 
+function togglePassword(inputId, buttonId) {
+    const input = document.getElementById(inputId);
+    const button = document.getElementById(buttonId);
+
+    if (input.type === 'password') {
+        input.type = 'text';
+        button.innerHTML = '🙈';
+        button.title = 'Hide password';
+    } else {
+        input.type = 'password';
+        button.innerHTML = '👁️';
+        button.title = 'Show password';
+    }
+}
+
 function showTab(tabName) {
-    // Remove active class from all tabs and contents
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-    
-    // Add active class to selected tab and content
+
     event.target.classList.add('active');
     document.getElementById(tabName + 'Content').classList.add('active');
-    
-    // Load data based on tab
+
     if (tabName === 'files') {
         loadFiles();
     } else if (tabName === 'users') {
@@ -77,7 +90,7 @@ async function login() {
             body: JSON.stringify({ username, password })
         });
 
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Login failed');
 
         const data = await safeJson(res);
 
@@ -92,7 +105,7 @@ async function login() {
         showMainPanel();
 
     } catch (e) {
-        showMessage('Login failed: ' + e.message, 'error');
+        showMessage(e.message, 'error');
     }
 }
 
@@ -106,6 +119,11 @@ async function register() {
         return;
     }
 
+    if (password.length < 6) {
+        showMessage('Password must be at least 6 characters', 'error');
+        return;
+    }
+
     try {
         const res = await fetch('/api/register', {
             method: 'POST',
@@ -113,10 +131,10 @@ async function register() {
             body: JSON.stringify({ username, password })
         });
 
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Registration failed');
 
         const data = await safeJson(res);
-        showMessage(data.msg, 'success');
+        showMessage(data.msg + '. You will be notified once approved.', 'success');
         setTimeout(showLogin, 2000);
 
     } catch (e) {
@@ -145,43 +163,166 @@ function showMainPanel() {
         pendingTab.style.display = 'block';
     }
 
+    currentPath = '';
     loadFiles();
 }
 
 /* =======================
-   FILES
+   FILES & FOLDERS
    ======================= */
-async function loadFiles() {
+async function loadFiles(path = '') {
+    currentPath = path || '';
+
     try {
-        const res = await fetch('/api/files', {
+        const res = await fetch('/api/files?folder=' + encodeURIComponent(currentPath), {
             headers: { Authorization: 'Bearer ' + token }
         });
 
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to load files');
 
         const data = await safeJson(res);
 
         fileCount.textContent = data.total_files;
         storageUsed.textContent = data.total_size_formatted;
 
-        // Render file list
+        // Update breadcrumb
+        updateBreadcrumb(currentPath);
+
+        // Render folders and files
         const fileListEl = document.getElementById('fileList');
-        if (data.files.length === 0) {
-            fileListEl.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📁</div><div>No files yet. Upload your first file!</div></div>';
-        } else {
-            fileListEl.innerHTML = data.files.map(file => `
+
+        let html = '';
+
+        // Show folders first
+        if (data.folders && data.folders.length > 0) {
+            html += '<div class="section-header">Folders</div>';
+            html += data.folders.map(folder => `
                 <div class="list-item">
                     <div class="item-info">
-                        <div class="item-name">📄 ${escapeHtml(file.name)}</div>
-                        <div class="item-meta">${file.size_formatted} • ${formatDate(file.modified)}</div>
+                        <div class="item-name folder-item" onclick="loadFiles('${currentPath ? currentPath + '/' : ''}${escapeHtml(folder.name)}')">
+                            📁 ${escapeHtml(folder.name)}
+                        </div>
+                        <div class="item-meta">${formatDate(folder.modified)}</div>
                     </div>
                     <div class="item-actions">
-                        <button class="btn btn-primary btn-small" onclick="downloadFile('${escapeHtml(file.name)}')">Download</button>
-                        <button class="btn btn-danger btn-small" onclick="deleteFile('${escapeHtml(file.name)}')">Delete</button>
+                        <button class="btn btn-danger btn-small" onclick="deleteFolder('${currentPath ? currentPath + '/' : ''}${escapeHtml(folder.name)}')">Delete</button>
                     </div>
                 </div>
             `).join('');
         }
+
+        // Show files
+        if (data.files && data.files.length > 0) {
+            html += '<div class="section-header">Files</div>';
+            html += data.files.map(file => {
+                const filePath = currentPath ? currentPath + '/' + file.name : file.name;
+                const canPreview = file.type !== 'other';
+
+                return `
+                    <div class="list-item">
+                        <div class="item-info">
+                            <div class="item-name">${getFileIcon(file.type)} ${escapeHtml(file.name)}</div>
+                            <div class="item-meta">${file.size_formatted} • ${formatDate(file.modified)} ${canPreview ? '• <span class="preview-badge">Preview available</span>' : ''}</div>
+                        </div>
+                        <div class="item-actions">
+                            ${canPreview ? `<button class="btn btn-secondary btn-small" onclick="previewFile('${escapeHtml(filePath)}')">👁️ Preview</button>` : ''}
+                            <button class="btn btn-primary btn-small" onclick="downloadFile('${escapeHtml(filePath)}')">⬇️ Download</button>
+                            <button class="btn btn-danger btn-small" onclick="deleteFile('${escapeHtml(filePath)}')">🗑️ Delete</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        if (!html) {
+            html = '<div class="empty-state"><div class="empty-state-icon">📁</div><div>This folder is empty</div></div>';
+        }
+
+        fileListEl.innerHTML = html;
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+function updateBreadcrumb(path) {
+    const breadcrumbEl = document.getElementById('breadcrumb');
+
+    if (!path) {
+        breadcrumbEl.innerHTML = '<span class="breadcrumb-item active">Home</span>';
+        return;
+    }
+
+    const parts = path.split('/');
+    let html = '<span class="breadcrumb-item" onclick="loadFiles()">Home</span>';
+
+    let currentPathBuild = '';
+    parts.forEach((part, index) => {
+        currentPathBuild += (currentPathBuild ? '/' : '') + part;
+        const pathToNavigate = currentPathBuild;
+
+        if (index === parts.length - 1) {
+            html += ` / <span class="breadcrumb-item active">${escapeHtml(part)}</span>`;
+        } else {
+            html += ` / <span class="breadcrumb-item" onclick="loadFiles('${escapeHtml(pathToNavigate)}')">${escapeHtml(part)}</span>`;
+        }
+    });
+
+    breadcrumbEl.innerHTML = html;
+}
+
+function getFileIcon(type) {
+    const icons = {
+        'image': '🖼️',
+        'pdf': '📄',
+        'text': '📝',
+        'other': '📎'
+    };
+    return icons[type] || '📎';
+}
+
+async function createFolder() {
+    const folderName = prompt('Enter folder name:');
+    if (!folderName || !folderName.trim()) return;
+
+    try {
+        const res = await fetch('/api/folder/create', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify({
+                current_path: currentPath,
+                folder_name: folderName.trim()
+            })
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to create folder');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        loadFiles(currentPath);
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+async function deleteFolder(folderPath) {
+    if (!confirm(`Delete folder "${folderPath}" and all its contents?`)) return;
+
+    try {
+        const res = await fetch('/api/folder/delete?path=' + encodeURIComponent(folderPath), {
+            method: 'DELETE',
+            headers: { Authorization: 'Bearer ' + token }
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to delete folder');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        loadFiles(currentPath);
 
     } catch (e) {
         showMessage(e.message, 'error', 'mainAlert');
@@ -191,6 +332,7 @@ async function loadFiles() {
 async function uploadFiles() {
     const formData = new FormData();
     for (const f of fileInput.files) formData.append('files', f);
+    formData.append('folder', currentPath);
 
     try {
         const res = await fetch('/api/upload', {
@@ -199,11 +341,11 @@ async function uploadFiles() {
             body: formData
         });
 
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Upload failed');
 
         const data = await safeJson(res);
         showMessage(data.msg, 'success', 'mainAlert');
-        loadFiles();
+        loadFiles(currentPath);
 
     } catch (e) {
         showMessage(e.message, 'error', 'mainAlert');
@@ -212,24 +354,53 @@ async function uploadFiles() {
     fileInput.value = '';
 }
 
-function downloadFile(filename) {
-    window.open(`/api/download/${encodeURIComponent(filename)}?token=${token}`, '_blank');
+function previewFile(filepath) {
+    const previewUrl = `/api/preview/${encodeURIComponent(filepath)}?token=${token}`;
+
+    // Create modal
+    const modal = document.createElement('div');
+    modal.className = 'preview-modal';
+    modal.onclick = (e) => {
+        if (e.target === modal) modal.remove();
+    };
+
+    const content = document.createElement('div');
+    content.className = 'preview-content';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'preview-close';
+    closeBtn.innerHTML = '×';
+    closeBtn.onclick = () => modal.remove();
+
+    const iframe = document.createElement('iframe');
+    iframe.src = previewUrl;
+    iframe.className = 'preview-frame';
+
+    content.appendChild(closeBtn);
+    content.appendChild(iframe);
+    modal.appendChild(content);
+    document.body.appendChild(modal);
 }
 
-async function deleteFile(filename) {
-    if (!confirm(`Are you sure you want to delete "${filename}"?`)) return;
+function downloadFile(filepath) {
+    window.open(`/api/download/${encodeURIComponent(filepath)}?token=${token}`, '_blank');
+}
+
+async function deleteFile(filepath) {
+    const filename = filepath.split('/').pop();
+    if (!confirm(`Delete "${filename}"?`)) return;
 
     try {
-        const res = await fetch(`/api/delete/${encodeURIComponent(filename)}`, {
+        const res = await fetch(`/api/delete/${encodeURIComponent(filepath)}`, {
             method: 'DELETE',
             headers: { Authorization: 'Bearer ' + token }
         });
 
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Delete failed');
 
         const data = await safeJson(res);
         showMessage(data.msg, 'success', 'mainAlert');
-        loadFiles();
+        loadFiles(currentPath);
 
     } catch (e) {
         showMessage(e.message, 'error', 'mainAlert');
@@ -245,10 +416,10 @@ async function loadUsers() {
             headers: { Authorization: 'Bearer ' + token }
         });
 
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to load users');
 
         const data = await safeJson(res);
-        
+
         const userListEl = document.getElementById('userList');
         if (data.users.length === 0) {
             userListEl.innerHTML = '<div class="empty-state"><div class="empty-state-icon">👥</div><div>No users found</div></div>';
@@ -257,7 +428,7 @@ async function loadUsers() {
                 <div class="list-item">
                     <div class="item-info">
                         <div class="item-name">
-                            ${escapeHtml(user.username)}
+                            👤 ${escapeHtml(user.username)}
                             <span class="badge badge-${user.role}">${user.role}</span>
                             <span class="badge badge-${user.status}">${user.status}</span>
                         </div>
@@ -281,10 +452,10 @@ async function loadPendingUsers() {
             headers: { Authorization: 'Bearer ' + token }
         });
 
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to load pending users');
 
         const data = await safeJson(res);
-        
+
         const pendingListEl = document.getElementById('pendingList');
         if (data.users.length === 0) {
             pendingListEl.innerHTML = '<div class="empty-state"><div class="empty-state-icon">✓</div><div>No pending approvals</div></div>';
@@ -292,12 +463,12 @@ async function loadPendingUsers() {
             pendingListEl.innerHTML = data.users.map(user => `
                 <div class="list-item">
                     <div class="item-info">
-                        <div class="item-name">${escapeHtml(user.username)}</div>
+                        <div class="item-name">👤 ${escapeHtml(user.username)}</div>
                         <div class="item-meta">Requested: ${formatDate(new Date(user.created_at).getTime() / 1000)}</div>
                     </div>
                     <div class="item-actions">
-                        <button class="btn btn-success btn-small" onclick="approveUser('${escapeHtml(user.username)}')">Approve</button>
-                        <button class="btn btn-danger btn-small" onclick="rejectUser('${escapeHtml(user.username)}')">Reject</button>
+                        <button class="btn btn-success btn-small" onclick="approveUser('${escapeHtml(user.username)}')">✓ Approve</button>
+                        <button class="btn btn-danger btn-small" onclick="rejectUser('${escapeHtml(user.username)}')">✗ Reject</button>
                     </div>
                 </div>
             `).join('');
@@ -328,16 +499,15 @@ async function addUser() {
             body: JSON.stringify({ username, password, role })
         });
 
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to add user');
 
         const data = await safeJson(res);
         showMessage(data.msg, 'success', 'mainAlert');
-        
-        // Clear form
+
         document.getElementById('newUsername').value = '';
         document.getElementById('newPassword').value = '';
         document.getElementById('newRole').value = 'user';
-        
+
         loadUsers();
 
     } catch (e) {
@@ -352,7 +522,7 @@ async function approveUser(username) {
             headers: { Authorization: 'Bearer ' + token }
         });
 
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to approve');
 
         const data = await safeJson(res);
         showMessage(data.msg, 'success', 'mainAlert');
@@ -364,7 +534,7 @@ async function approveUser(username) {
 }
 
 async function rejectUser(username) {
-    if (!confirm(`Are you sure you want to reject user "${username}"?`)) return;
+    if (!confirm(`Reject user "${username}"?`)) return;
 
     try {
         const res = await fetch(`/api/users/${encodeURIComponent(username)}/reject`, {
@@ -372,7 +542,7 @@ async function rejectUser(username) {
             headers: { Authorization: 'Bearer ' + token }
         });
 
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to reject');
 
         const data = await safeJson(res);
         showMessage(data.msg, 'success', 'mainAlert');
@@ -384,7 +554,7 @@ async function rejectUser(username) {
 }
 
 async function removeUser(username) {
-    if (!confirm(`Are you sure you want to delete user "${username}" and all their files?`)) return;
+    if (!confirm(`Delete user "${username}" and all their files?`)) return;
 
     try {
         const res = await fetch(`/api/users/${encodeURIComponent(username)}`, {
@@ -392,7 +562,7 @@ async function removeUser(username) {
             headers: { Authorization: 'Bearer ' + token }
         });
 
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to delete user');
 
         const data = await safeJson(res);
         showMessage(data.msg, 'success', 'mainAlert');
@@ -416,12 +586,12 @@ function formatDate(timestamp) {
     const date = new Date(timestamp * 1000);
     const now = new Date();
     const diff = now - date;
-    
+
     if (diff < 60000) return 'Just now';
     if (diff < 3600000) return Math.floor(diff / 60000) + ' min ago';
     if (diff < 86400000) return Math.floor(diff / 3600000) + ' hours ago';
     if (diff < 604800000) return Math.floor(diff / 86400000) + ' days ago';
-    
+
     return date.toLocaleDateString();
 }
 
@@ -429,12 +599,12 @@ function formatSize(bytes) {
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
     let size = bytes;
     let unitIndex = 0;
-    
+
     while (size >= 1024 && unitIndex < units.length - 1) {
         size /= 1024;
         unitIndex++;
     }
-    
+
     return size.toFixed(2) + ' ' + units[unitIndex];
 }
 

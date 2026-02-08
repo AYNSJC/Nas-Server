@@ -24,11 +24,14 @@
                 <div class="card-header">Sign In</div>
                 <div class="form-group">
                     <label>Username</label>
-                    <input type="text" id="loginUsername" placeholder="Enter username" value="admin">
+                    <input type="text" id="loginUsername" placeholder="Enter username" autocomplete="username">
                 </div>
                 <div class="form-group">
                     <label>Password</label>
-                    <input type="password" id="loginPassword" placeholder="Enter password" value="admin123">
+                    <div class="password-input">
+                        <input type="password" id="loginPassword" placeholder="Enter password" autocomplete="current-password">
+                        <button type="button" class="password-toggle" id="loginPasswordToggle" onclick="togglePassword('loginPassword', 'loginPasswordToggle')" title="Show password">👁️</button>
+                    </div>
                 </div>
                 <button class="btn btn-primary btn-block" onclick="login()">Sign In</button>
                 <div class="text-center mt-3">
@@ -40,15 +43,22 @@
                 <div class="card-header">Register</div>
                 <div class="form-group">
                     <label>Username</label>
-                    <input type="text" id="regUsername" placeholder="Choose username">
+                    <input type="text" id="regUsername" placeholder="Choose username (3-32 characters)" autocomplete="username">
+                    <small class="form-help">Only letters, numbers, and underscores</small>
                 </div>
                 <div class="form-group">
                     <label>Password</label>
-                    <input type="password" id="regPassword" placeholder="Choose password">
+                    <div class="password-input">
+                        <input type="password" id="regPassword" placeholder="Choose password (min 6 characters)" autocomplete="new-password">
+                        <button type="button" class="password-toggle" id="regPasswordToggle" onclick="togglePassword('regPassword', 'regPasswordToggle')" title="Show password">👁️</button>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>Confirm Password</label>
-                    <input type="password" id="regPasswordConfirm" placeholder="Confirm password">
+                    <div class="password-input">
+                        <input type="password" id="regPasswordConfirm" placeholder="Confirm password" autocomplete="new-password">
+                        <button type="button" class="password-toggle" id="regPasswordConfirmToggle" onclick="togglePassword('regPasswordConfirm', 'regPasswordConfirmToggle')" title="Show password">👁️</button>
+                    </div>
                 </div>
                 <button class="btn btn-primary btn-block" onclick="register()">Register</button>
                 <div class="text-center mt-3">
@@ -78,11 +88,14 @@
                 </div>
             </div>
 
+            <div class="breadcrumb-container">
+                <div id="breadcrumb" class="breadcrumb"></div>
+            </div>
+
             <div class="card">
-                <div class="upload-zone" onclick="document.getElementById('fileInput').click()">
-                    <div class="upload-zone-icon">📤</div>
-                    <div class="upload-zone-text">Upload Files</div>
-                    <div class="upload-zone-hint">Click to browse or drag files here</div>
+                <div class="file-actions-bar">
+                    <button class="btn btn-secondary" onclick="createFolder()">📁 New Folder</button>
+                    <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">📤 Upload Files</button>
                     <input type="file" id="fileInput" multiple style="display: none;" onchange="uploadFiles()">
                 </div>
             </div>
@@ -99,7 +112,10 @@
                 </div>
                 <div class="form-group">
                     <label>Password</label>
-                    <input type="password" id="newPassword" placeholder="Enter password">
+                    <div class="password-input">
+                        <input type="password" id="newPassword" placeholder="Enter password">
+                        <button type="button" class="password-toggle" id="newPasswordToggle" onclick="togglePassword('newPassword', 'newPasswordToggle')" title="Show password">👁️</button>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>Role</label>
