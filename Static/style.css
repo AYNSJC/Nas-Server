@@ -839,34 +839,33 @@ input::placeholder {
     font-weight: 500;
 }
 
-/* Preview Modal */
+/* Preview Modal - UPDATED FOR FULL SCREEN */
 .preview-modal {
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.7);
+    background: rgba(0, 0, 0, 0.95);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 1000;
-    padding: 2rem;
+    padding: 1rem;
     animation: fadeIn 0.3s ease;
     backdrop-filter: blur(10px);
 }
 
 :root[data-theme="light"] .preview-modal {
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(0, 0, 0, 0.85);
 }
 
 .preview-content {
     position: relative;
     background: var(--bg-secondary);
     border-radius: var(--radius);
-    width: 100%;
-    max-width: 1400px;
-    max-height: 90vh;
+    width: 98vw;
+    height: 96vh;
     display: flex;
     flex-direction: column;
     box-shadow: var(--shadow-lg);
@@ -878,6 +877,7 @@ input::placeholder {
     padding: 1rem 1.5rem;
     border-bottom: 1px solid var(--border);
     background: var(--bg-primary);
+    flex-shrink: 0;
 }
 
 .preview-nav {
@@ -918,11 +918,11 @@ input::placeholder {
 
 .preview-close {
     position: absolute;
-    top: -3.5rem;
-    right: 0;
-    background: rgba(239, 68, 68, 0.2);
+    top: 1rem;
+    right: 1rem;
+    background: rgba(239, 68, 68, 0.9);
     color: white;
-    border: 1px solid rgba(239, 68, 68, 0.3);
+    border: none;
     font-size: 2rem;
     width: 3rem;
     height: 3rem;
@@ -932,12 +932,14 @@ input::placeholder {
     line-height: 1;
     z-index: 10;
     font-weight: 300;
-    backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .preview-close:hover {
-    background: rgba(239, 68, 68, 0.4);
-    transform: rotate(90deg);
+    background: var(--danger);
+    transform: rotate(90deg) scale(1.1);
 }
 
 .preview-frame {
@@ -1138,15 +1140,18 @@ input::placeholder {
     }
 
     .preview-modal {
-        padding: 1rem;
+        padding: 0.5rem;
     }
 
-    .preview-frame {
-        height: 70vh;
+    .preview-content {
+        width: 100vw;
+        height: 100vh;
+        border-radius: 0;
     }
 
     .preview-close {
-        top: -3rem;
+        top: 0.5rem;
+        right: 0.5rem;
         font-size: 1.5rem;
         width: 2.5rem;
         height: 2.5rem;

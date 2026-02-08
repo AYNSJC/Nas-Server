@@ -949,15 +949,8 @@ def preview_file(filepath):
     file_type = get_file_type(file_path.name)
 
     if file_type == 'image':
-        try:
-            img = Image.open(file_path)
-            img.thumbnail((1920, 1080), Image.Resampling.LANCZOS)
-            img_io = io.BytesIO()
-            img.save(img_io, format=img.format or 'PNG')
-            img_io.seek(0)
-            return send_file(img_io, mimetype=f'image/{img.format.lower()}')
-        except:
-            return send_file(file_path, mimetype=mimetypes.guess_type(file_path)[0])
+        # Return full-size image, let browser handle sizing
+        return send_file(file_path, mimetype=mimetypes.guess_type(file_path)[0])
 
     elif file_type == 'pdf':
         return send_file(file_path, mimetype='application/pdf')
@@ -1003,15 +996,8 @@ def preview_network_file(file_id):
     file_type = get_file_type(file_path.name)
 
     if file_type == 'image':
-        try:
-            img = Image.open(file_path)
-            img.thumbnail((1920, 1080), Image.Resampling.LANCZOS)
-            img_io = io.BytesIO()
-            img.save(img_io, format=img.format or 'PNG')
-            img_io.seek(0)
-            return send_file(img_io, mimetype=f'image/{img.format.lower()}')
-        except:
-            return send_file(file_path, mimetype=mimetypes.guess_type(file_path)[0])
+        # Return full-size image, let browser handle sizing
+        return send_file(file_path, mimetype=mimetypes.guess_type(file_path)[0])
 
     elif file_type == 'pdf':
         return send_file(file_path, mimetype='application/pdf')
