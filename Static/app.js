@@ -3,6 +3,37 @@ let currentUser = localStorage.getItem('username');
 let userRole = localStorage.getItem('role');
 let currentPath = '';
 
+// Theme management
+function initTheme() {
+    const savedTheme = localStorage.getItem('theme');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    
+    // Auto-select light mode by default, unless user has saved preference
+    const theme = savedTheme || 'light';
+    document.documentElement.setAttribute('data-theme', theme);
+    updateThemeIcon(theme);
+}
+
+function toggleTheme() {
+    const currentTheme = document.documentElement.getAttribute('data-theme');
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    
+    document.documentElement.setAttribute('data-theme', newTheme);
+    localStorage.setItem('theme', newTheme);
+    updateThemeIcon(newTheme);
+}
+
+function updateThemeIcon(theme) {
+    const themeToggle = document.getElementById('themeToggle');
+    if (themeToggle) {
+        themeToggle.innerHTML = theme === 'dark' ? '☀️' : '🌙';
+        themeToggle.title = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    }
+}
+
+// Initialize theme on page load
+initTheme();
+
 if (token) showMainPanel();
 
 /* =======================
@@ -347,6 +378,10 @@ function showMainPanel() {
 
     navUsername.textContent = currentUser;
     navRole.textContent = ' • ' + userRole;
+
+    // Initialize theme toggle
+    const currentTheme = document.documentElement.getAttribute('data-theme');
+    updateThemeIcon(currentTheme);
 
     if (userRole === 'admin') {
         usersTab.style.display = 'block';
