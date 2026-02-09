@@ -101,7 +101,9 @@
                 <div class="file-actions-bar">
                     <button class="btn btn-secondary" onclick="createFolder()">New Folder</button>
                     <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">Upload Files</button>
+                    <button class="btn btn-primary" onclick="document.getElementById('folderInput').click()">Upload Folder</button>
                     <input type="file" id="fileInput" multiple style="display: none;" onchange="uploadFiles()">
+                    <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;" onchange="uploadFolder()">
                 </div>
             </div>
 
@@ -150,6 +152,13 @@
                         <option value="user">User</option>
                         <option value="admin">Admin</option>
                     </select>
+                </div>
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 0.5rem; text-transform: none;">
+                        <input type="checkbox" id="newAutoShare" style="width: auto; margin: 0;">
+                        <span>Auto-share to network (no approval required)</span>
+                    </label>
+                    <small class="form-help">User can upload directly to network without admin approval</small>
                 </div>
                 <button class="btn btn-primary" onclick="addUser()">Add User</button>
             </div>

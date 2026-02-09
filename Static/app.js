@@ -1,6 +1,7 @@
 let token = localStorage.getItem('token');
 let currentUser = localStorage.getItem('username');
 let userRole = localStorage.getItem('role');
+let userAutoShare = localStorage.getItem('auto_share') === 'true';
 let currentPath = '';
 let selectedFiles = new Set();
 let allFiles = [];
@@ -174,6 +175,7 @@ function openSettings() {
                     <h3 class="settings-section-title">Account Information</h3>
                     <p style="color: var(--text-secondary); margin-bottom: 0.5rem;"><strong>Username:</strong> ${currentUser}</p>
                     <p style="color: var(--text-secondary);"><strong>Role:</strong> ${userRole}</p>
+                    ${userAutoShare ? '<p style="color: var(--text-secondary);"><strong>Auto-share:</strong> Enabled</p>' : ''}
                 </div>
             </div>
         </div>
@@ -321,10 +323,12 @@ async function login() {
         token = data.access_token;
         currentUser = username;
         userRole = data.role;
+        userAutoShare = data.auto_share || false;
 
         localStorage.setItem('token', token);
         localStorage.setItem('username', username);
         localStorage.setItem('role', userRole);
+        localStorage.setItem('auto_share', userAutoShare);
 
         showMainPanel();
 
@@ -380,7 +384,7 @@ function showMainPanel() {
     navbar.style.display = 'block';
 
     navUsername.textContent = currentUser;
-    navRole.textContent = ' • ' + userRole;
+    navRole.textContent = ' • ' + userRole + (userAutoShare ? ' • Auto-share' : '');
 
     // Initialize theme toggle
     const currentTheme = document.documentElement.getAttribute('data-theme');
@@ -532,6 +536,41 @@ async function bulkShareFiles() {
     }
 }
 
+async function uploadFolder() {
+    const files = folderInput.files;
+    if (!files || files.length === 0) return;
+
+    const formData = new FormData();
+    
+    // Add files with their relative paths
+    for (const file of files) {
+        formData.append('files', file);
+        formData.append('paths', file.webkitRelativePath || file.name);
+    }
+    
+    formData.append('folder', currentPath);
+    formData.append('is_folder_upload', 'true');
+
+    try {
+        const res = await fetch('/api/upload', {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + token },
+            body: formData
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Upload failed');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        loadFiles(currentPath);
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+
+    folderInput.value = '';
+}
+
 async function loadFiles(path = '') {
     currentPath = path || '';
     selectedFiles.clear();
@@ -657,6 +696,7 @@ function getFileIcon(type) {
     };
     return icons[type] || '📎';
 }
+
 async function createFolder() {
     const folderName = prompt('Enter folder name:');
     if (!folderName || !folderName.trim()) return;
@@ -1070,9 +1110,13 @@ async function loadNetworkFiles() {
     }
 }
 
-async function viewNetworkFolder(folderId) {
+async function viewNetworkFolder(folderId, subPath = '') {
     try {
-        const res = await fetch(`/api/network/folder/${encodeURIComponent(folderId)}`, {
+        const url = subPath 
+            ? `/api/network/folder/${encodeURIComponent(folderId)}?path=${encodeURIComponent(subPath)}`
+            : `/api/network/folder/${encodeURIComponent(folderId)}`;
+            
+        const res = await fetch(url, {
             headers: { Authorization: 'Bearer ' + token }
         });
 
@@ -1099,27 +1143,65 @@ async function viewNetworkFolder(folderId) {
 
         let html = `
             <h2 style="margin-bottom: 1rem; color: var(--text-primary); font-family: 'Syne', sans-serif;">📁 ${escapeHtml(data.folder.folder_name)}</h2>
-            <p style="margin-bottom: 1.5rem; color: var(--text-secondary);">Shared by ${escapeHtml(data.folder.username)}</p>
+            <p style="margin-bottom: 0.5rem; color: var(--text-secondary);">Shared by ${escapeHtml(data.folder.username)}</p>
         `;
 
-        if (data.files.length === 0) {
+        // Add breadcrumb for subfolders
+        if (subPath) {
+            const parts = subPath.split('/');
+            let breadcrumb = `<div style="margin-bottom: 1rem; color: var(--text-secondary);">
+                <span onclick="viewNetworkFolder('${folderId}')" style="cursor: pointer; color: var(--primary);">Root</span>`;
+            
+            let currentPath = '';
+            parts.forEach((part, idx) => {
+                currentPath += (currentPath ? '/' : '') + part;
+                const path = currentPath;
+                if (idx < parts.length - 1) {
+                    breadcrumb += ` / <span onclick="viewNetworkFolder('${folderId}', '${path}')" style="cursor: pointer; color: var(--primary);">${escapeHtml(part)}</span>`;
+                } else {
+                    breadcrumb += ` / <span>${escapeHtml(part)}</span>`;
+                }
+            });
+            breadcrumb += '</div>';
+            html += breadcrumb;
+        }
+
+        if (data.files.length === 0 && data.subfolders.length === 0) {
             html += '<div class="empty-state"><div class="empty-state-icon">📁</div><div class="empty-state-text">This folder is empty</div></div>';
         } else {
-            data.files.forEach(file => {
-                const canPreview = file.file_type !== 'other';
-                html += `
-                    <div class="list-item" style="margin-bottom: 0.75rem;">
-                        <div class="item-info">
-                            <div class="item-name">${getFileIcon(file.file_type)} ${escapeHtml(file.relative_path)}</div>
-                            <div class="item-meta">${formatSize(file.file_size)}</div>
+            // Show subfolders first
+            if (data.subfolders && data.subfolders.length > 0) {
+                html += '<div class="section-header" style="margin-top: 1.5rem;">Folders</div>';
+                data.subfolders.forEach(subfolder => {
+                    html += `
+                        <div class="list-item" style="margin-bottom: 0.75rem; cursor: pointer;" onclick="event.stopPropagation(); viewNetworkFolder('${folderId}', '${escapeHtml(subfolder.relative_path)}')">
+                            <div class="item-info">
+                                <div class="item-name">📁 ${escapeHtml(subfolder.name)}</div>
+                            </div>
                         </div>
-                        <div class="item-actions">
-                            ${canPreview ? `<button class="btn btn-secondary btn-small" onclick="previewFile('${escapeHtml(file.filepath)}')">Preview</button>` : ''}
-                            <button class="btn btn-primary btn-small" onclick="downloadFile('${escapeHtml(file.filepath)}')">Download</button>
+                    `;
+                });
+            }
+
+            // Show files
+            if (data.files && data.files.length > 0) {
+                html += '<div class="section-header" style="margin-top: 1.5rem;">Files</div>';
+                data.files.forEach(file => {
+                    const canPreview = file.file_type !== 'other';
+                    html += `
+                        <div class="list-item" style="margin-bottom: 0.75rem;">
+                            <div class="item-info">
+                                <div class="item-name">${getFileIcon(file.file_type)} ${escapeHtml(file.relative_path)}</div>
+                                <div class="item-meta">${formatSize(file.file_size)}</div>
+                            </div>
+                            <div class="item-actions">
+                                ${canPreview ? `<button class="btn btn-secondary btn-small" onclick="previewFile('${escapeHtml(file.filepath)}')">Preview</button>` : ''}
+                                <button class="btn btn-primary btn-small" onclick="downloadFile('${escapeHtml(file.filepath)}')">Download</button>
+                            </div>
                         </div>
-                    </div>
-                `;
-            });
+                    `;
+                });
+            }
         }
 
         content.innerHTML = html;
@@ -1227,15 +1309,41 @@ async function loadUsers() {
                             👤 ${escapeHtml(user.username)}
                             <span class="badge badge-${user.role}">${user.role}</span>
                             <span class="badge badge-${user.status}">${user.status}</span>
+                            ${user.auto_share ? '<span class="badge badge-shared">Auto-share</span>' : ''}
                         </div>
                         <div class="item-meta">Created: ${formatDate(new Date(user.created_at).getTime() / 1000)} • Storage: ${formatSize(user.storage_used)}</div>
                     </div>
                     <div class="item-actions">
-                        ${user.username !== 'admin' ? `<button class="btn btn-danger btn-small" onclick="removeUser('${escapeHtml(user.username)}')">Delete</button>` : ''}
+                        ${user.username !== 'admin' ? `
+                            <button class="btn btn-secondary btn-small" onclick="toggleAutoShare('${escapeHtml(user.username)}', ${!user.auto_share})">${user.auto_share ? 'Disable' : 'Enable'} Auto-share</button>
+                            <button class="btn btn-danger btn-small" onclick="removeUser('${escapeHtml(user.username)}')">Delete</button>
+                        ` : ''}
                     </div>
                 </div>
             `).join('');
         }
+
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+async function toggleAutoShare(username, enable) {
+    try {
+        const res = await fetch(`/api/users/${encodeURIComponent(username)}/auto-share`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify({ auto_share: enable })
+        });
+
+        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to update auto-share');
+
+        const data = await safeJson(res);
+        showMessage(data.msg, 'success', 'mainAlert');
+        loadUsers();
 
     } catch (e) {
         showMessage(e.message, 'error', 'mainAlert');
@@ -1279,6 +1387,7 @@ async function addUser() {
     const username = document.getElementById('newUsername').value.trim();
     const password = document.getElementById('newPassword').value;
     const role = document.getElementById('newRole').value;
+    const autoShare = document.getElementById('newAutoShare').checked;
 
     if (!username || !password) {
         showMessage('Please fill in all fields', 'error', 'mainAlert');
@@ -1292,7 +1401,7 @@ async function addUser() {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer ' + token
             },
-            body: JSON.stringify({ username, password, role })
+            body: JSON.stringify({ username, password, role, auto_share: autoShare })
         });
 
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to add user');
@@ -1303,6 +1412,7 @@ async function addUser() {
         document.getElementById('newUsername').value = '';
         document.getElementById('newPassword').value = '';
         document.getElementById('newRole').value = 'user';
+        document.getElementById('newAutoShare').checked = false;
 
         loadUsers();
 
