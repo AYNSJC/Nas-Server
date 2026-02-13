@@ -839,33 +839,34 @@ input::placeholder {
     font-weight: 500;
 }
 
-/* Preview Modal - UPDATED FOR FULL SCREEN */
+/* Preview Modal */
 .preview-modal {
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.95);
+    background: rgba(0, 0, 0, 0.7);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 1000;
-    padding: 1rem;
+    padding: 2rem;
     animation: fadeIn 0.3s ease;
     backdrop-filter: blur(10px);
 }
 
 :root[data-theme="light"] .preview-modal {
-    background: rgba(0, 0, 0, 0.85);
+    background: rgba(0, 0, 0, 0.5);
 }
 
 .preview-content {
     position: relative;
     background: var(--bg-secondary);
     border-radius: var(--radius);
-    width: 98vw;
-    height: 96vh;
+    width: 100%;
+    max-width: 1400px;
+    max-height: 90vh;
     display: flex;
     flex-direction: column;
     box-shadow: var(--shadow-lg);
@@ -877,7 +878,6 @@ input::placeholder {
     padding: 1rem 1.5rem;
     border-bottom: 1px solid var(--border);
     background: var(--bg-primary);
-    flex-shrink: 0;
 }
 
 .preview-nav {
@@ -918,11 +918,11 @@ input::placeholder {
 
 .preview-close {
     position: absolute;
-    top: 1rem;
-    right: 1rem;
-    background: rgba(239, 68, 68, 0.9);
+    top: -3.5rem;
+    right: 0;
+    background: rgba(239, 68, 68, 0.2);
     color: white;
-    border: none;
+    border: 1px solid rgba(239, 68, 68, 0.3);
     font-size: 2rem;
     width: 3rem;
     height: 3rem;
@@ -932,14 +932,12 @@ input::placeholder {
     line-height: 1;
     z-index: 10;
     font-weight: 300;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    backdrop-filter: blur(10px);
 }
 
 .preview-close:hover {
-    background: var(--danger);
-    transform: rotate(90deg) scale(1.1);
+    background: rgba(239, 68, 68, 0.4);
+    transform: rotate(90deg);
 }
 
 .preview-frame {
@@ -1140,18 +1138,15 @@ input::placeholder {
     }
 
     .preview-modal {
-        padding: 0.5rem;
+        padding: 1rem;
     }
 
-    .preview-content {
-        width: 100vw;
-        height: 100vh;
-        border-radius: 0;
+    .preview-frame {
+        height: 70vh;
     }
 
     .preview-close {
-        top: 0.5rem;
-        right: 0.5rem;
+        top: -3rem;
         font-size: 1.5rem;
         width: 2.5rem;
         height: 2.5rem;
@@ -1174,3 +1169,53 @@ input::placeholder {
         font-size: 0.875rem;
     }
 }
+
+/* ── Upload progress widget (navbar) ──────────────────────────────────────── */
+.upload-progress-widget {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    max-width: 340px;
+    margin: 0 1.5rem;
+}
+
+.upload-progress-bar-wrap {
+    height: 4px;
+    background: var(--border-color);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.upload-progress-bar {
+    height: 100%;
+    background: var(--primary);
+    border-radius: 2px;
+    width: 0%;
+    transition: width 0.2s ease;
+}
+
+.upload-progress-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.upload-progress-name {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+}
+
+.upload-progress-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--primary);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+

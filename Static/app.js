@@ -1,11 +1,37 @@
 let token = localStorage.getItem('token');
 let currentUser = localStorage.getItem('username');
 let userRole = localStorage.getItem('role');
-let userAutoShare = localStorage.getItem('auto_share') === 'true';
 let currentPath = '';
 let selectedFiles = new Set();
 let allFiles = [];
 let currentPreviewIndex = -1;
+
+// Network folder navigation state
+let currentNetworkFolderId = null;
+let currentNetworkSubfolder = '';
+
+/* Upload queue state — tracks all files queued across uploadFiles() + uploadFolder() calls */
+const uploadQueue = { total: 0, done: 0, active: '' };
+
+function uploadProgressShow() {
+    document.getElementById('uploadProgress').style.display = 'flex';
+}
+
+function uploadProgressHide() {
+    document.getElementById('uploadProgress').style.display = 'none';
+    uploadQueue.total = 0;
+    uploadQueue.done  = 0;
+    uploadQueue.active = '';
+}
+
+function uploadProgressUpdate(filename, chunkPct) {
+    const remaining = uploadQueue.total - uploadQueue.done;
+    document.getElementById('uploadProgressName').textContent = filename;
+    document.getElementById('uploadProgressCount').textContent =
+        remaining + ' file' + (remaining !== 1 ? 's' : '') + ' left';
+    // Progress bar reflects chunk progress within current file
+    document.getElementById('uploadProgressBar').style.width = chunkPct + '%';
+}
 
 // Theme management
 function initTheme() {
@@ -104,6 +130,9 @@ function showTab(tabName) {
     } else if (tabName === 'shares') {
         loadPendingShares();
     } else if (tabName === 'network') {
+        // Reset network navigation state
+        currentNetworkFolderId = null;
+        currentNetworkSubfolder = '';
         loadNetworkFiles();
     }
 }
@@ -175,7 +204,6 @@ function openSettings() {
                     <h3 class="settings-section-title">Account Information</h3>
                     <p style="color: var(--text-secondary); margin-bottom: 0.5rem;"><strong>Username:</strong> ${currentUser}</p>
                     <p style="color: var(--text-secondary);"><strong>Role:</strong> ${userRole}</p>
-                    ${userAutoShare ? '<p style="color: var(--text-secondary);"><strong>Auto-share:</strong> Enabled</p>' : ''}
                 </div>
             </div>
         </div>
@@ -323,12 +351,10 @@ async function login() {
         token = data.access_token;
         currentUser = username;
         userRole = data.role;
-        userAutoShare = data.auto_share || false;
 
         localStorage.setItem('token', token);
         localStorage.setItem('username', username);
         localStorage.setItem('role', userRole);
-        localStorage.setItem('auto_share', userAutoShare);
 
         showMainPanel();
 
@@ -384,7 +410,7 @@ function showMainPanel() {
     navbar.style.display = 'block';
 
     navUsername.textContent = currentUser;
-    navRole.textContent = ' • ' + userRole + (userAutoShare ? ' • Auto-share' : '');
+    navRole.textContent = ' • ' + userRole;
 
     // Initialize theme toggle
     const currentTheme = document.documentElement.getAttribute('data-theme');
@@ -536,39 +562,17 @@ async function bulkShareFiles() {
     }
 }
 
-async function uploadFolder() {
-    const files = folderInput.files;
-    if (!files || files.length === 0) return;
-
-    const formData = new FormData();
-    
-    // Add files with their relative paths
-    for (const file of files) {
-        formData.append('files', file);
-        formData.append('paths', file.webkitRelativePath || file.name);
-    }
-    
-    formData.append('folder', currentPath);
-    formData.append('is_folder_upload', 'true');
-
+/* Always fetch stats from root regardless of which folder we're browsing */
+async function loadGlobalStats() {
     try {
-        const res = await fetch('/api/upload', {
-            method: 'POST',
-            headers: { Authorization: 'Bearer ' + token },
-            body: formData
+        const res = await fetch('/api/stats', {
+            headers: { Authorization: 'Bearer ' + token }
         });
-
-        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Upload failed');
-
+        if (!res.ok) return;
         const data = await safeJson(res);
-        showMessage(data.msg, 'success', 'mainAlert');
-        loadFiles(currentPath);
-
-    } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
-    }
-
-    folderInput.value = '';
+        fileCount.textContent   = data.total_files;
+        storageUsed.textContent = data.total_size_formatted;
+    } catch (e) { /* silently ignore */ }
 }
 
 async function loadFiles(path = '') {
@@ -585,8 +589,8 @@ async function loadFiles(path = '') {
 
         const data = await safeJson(res);
 
-        fileCount.textContent = data.total_files;
-        storageUsed.textContent = data.total_size_formatted;
+        // Stats always show global totals — loaded separately
+        loadGlobalStats();
 
         updateBreadcrumb(currentPath);
 
@@ -696,7 +700,6 @@ function getFileIcon(type) {
     };
     return icons[type] || '📎';
 }
-
 async function createFolder() {
     const folderName = prompt('Enter folder name:');
     if (!folderName || !folderName.trim()) return;
@@ -745,29 +748,126 @@ async function deleteFolder(folderPath) {
     }
 }
 
-async function uploadFiles() {
-    const formData = new FormData();
-    for (const f of fileInput.files) formData.append('files', f);
-    formData.append('folder', currentPath);
+/* =======================
+   UPLOAD (with chunking for large files)
+   ======================= */
+const CHUNK_SIZE = 10 * 1024 * 1024; // 10 MB per chunk
 
-    try {
-        const res = await fetch('/api/upload', {
+function generateUploadId() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+}
+
+async function uploadWithChunks(file, folder, relPath) {
+    const name        = relPath || file.name;
+    const isFolderUp  = !!relPath && relPath.includes('/');
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE) || 1;
+    const uploadId    = generateUploadId();
+
+    for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const chunk = file.slice(start, Math.min(start + CHUNK_SIZE, file.size));
+        const pct   = Math.round(((i + 1) / totalChunks) * 100);
+
+        uploadProgressUpdate(name, pct);
+
+        const formData = new FormData();
+        formData.append('file',             chunk);
+        formData.append('upload_id',        uploadId);
+        formData.append('filename',         name);
+        formData.append('chunk_index',      i);
+        formData.append('total_chunks',     totalChunks);
+        formData.append('folder',           folder);
+        if (isFolderUp) formData.append('is_folder_upload', 'true');
+
+        const res = await fetch('/api/upload/chunk', {
             method: 'POST',
             headers: { Authorization: 'Bearer ' + token },
             body: formData
         });
 
-        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Upload failed');
+        if (!res.ok) {
+            // Cancel remaining chunks server-side
+            fetch('/api/upload/chunk/cancel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+                body: JSON.stringify({ upload_id: uploadId })
+            }).catch(() => {});
+            const err = (await safeJson(res).catch(() => ({}))).msg || 'Upload failed';
+            throw new Error(err);
+        }
+    }
+}
 
-        const data = await safeJson(res);
-        showMessage(data.msg, 'success', 'mainAlert');
-        loadFiles(currentPath);
+async function uploadFiles() {
+    const files = Array.from(fileInput.files);
+    if (!files.length) return;
 
-    } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+    uploadQueue.total += files.length;
+    uploadProgressShow();
+
+    let succeeded = 0, failed = 0;
+
+    for (const file of files) {
+        try {
+            await uploadWithChunks(file, currentPath, null);
+            succeeded++;
+        } catch (e) {
+            failed++;
+            showMessage(`"${file.name}" failed: ${e.message}`, 'error', 'mainAlert');
+        }
+        uploadQueue.done++;
     }
 
     fileInput.value = '';
+
+    // Refresh file list + global stats
+    await loadFiles(currentPath);
+    await loadGlobalStats();
+
+    if (uploadQueue.done >= uploadQueue.total) {
+        uploadProgressHide();
+        if (failed === 0)
+            showMessage(`Uploaded ${succeeded} file${succeeded !== 1 ? 's' : ''} successfully`, 'success', 'mainAlert');
+        else
+            showMessage(`${succeeded} uploaded, ${failed} failed`, 'error', 'mainAlert');
+    }
+}
+
+async function uploadFolder() {
+    const files = Array.from(document.getElementById('folderInput').files);
+    if (!files.length) return;
+
+    uploadQueue.total += files.length;
+    uploadProgressShow();
+
+    let succeeded = 0, failed = 0;
+
+    for (const file of files) {
+        const relPath = file.webkitRelativePath || file.name;
+        try {
+            await uploadWithChunks(file, currentPath, relPath);
+            succeeded++;
+        } catch (e) {
+            failed++;
+        }
+        uploadQueue.done++;
+    }
+
+    document.getElementById('folderInput').value = '';
+
+    await loadFiles(currentPath);
+    await loadGlobalStats();
+
+    if (uploadQueue.done >= uploadQueue.total) {
+        uploadProgressHide();
+        if (failed === 0)
+            showMessage(`Uploaded ${succeeded} file${succeeded !== 1 ? 's' : ''} successfully`, 'success', 'mainAlert');
+        else
+            showMessage(`${succeeded} uploaded, ${failed} failed`, 'error', 'mainAlert');
+    }
 }
 
 function previewFile(filepath, index = -1) {
@@ -1067,12 +1167,12 @@ async function loadNetworkFiles() {
                     return `
                         <div class="list-item">
                             <div class="item-info">
-                                <div class="item-name">📁 ${escapeHtml(folder.folder_name)}</div>
+                                <div class="item-name folder-item" onclick="viewNetworkFolder('${escapeHtml(folder.id)}', '')">📁 ${escapeHtml(folder.folder_name)}</div>
                                 <div class="item-meta">Shared by ${escapeHtml(folder.username)} • ${formatDate(new Date(folder.approved_at).getTime() / 1000)}</div>
                             </div>
                             <div class="item-actions">
-                                <button class="btn btn-primary btn-small" onclick="viewNetworkFolder('${escapeHtml(folder.id)}')">Open Folder</button>
-                                ${(isOwner || isAdmin) ? `<button class="btn btn-danger btn-small" onclick="removeFolderShare('${escapeHtml(folder.id)}')">Remove</button>` : ''}
+                                <button class="btn btn-primary btn-small" onclick="viewNetworkFolder('${escapeHtml(folder.id)}', ''); event.stopPropagation();">Open Folder</button>
+                                ${(isOwner || isAdmin) ? `<button class="btn btn-danger btn-small" onclick="removeFolderShare('${escapeHtml(folder.id)}'); event.stopPropagation();">Remove</button>` : ''}
                             </div>
                         </div>
                     `;
@@ -1110,104 +1210,105 @@ async function loadNetworkFiles() {
     }
 }
 
-async function viewNetworkFolder(folderId, subPath = '') {
+async function viewNetworkFolder(folderId, subfolder) {
+    currentNetworkFolderId = folderId;
+    currentNetworkSubfolder = subfolder || '';
+
     try {
-        const url = subPath 
-            ? `/api/network/folder/${encodeURIComponent(folderId)}?path=${encodeURIComponent(subPath)}`
-            : `/api/network/folder/${encodeURIComponent(folderId)}`;
-            
+        let url = `/api/network/folder/${encodeURIComponent(folderId)}`;
+        if (currentNetworkSubfolder) {
+            url += `?subfolder=${encodeURIComponent(currentNetworkSubfolder)}`;
+        }
+
         const res = await fetch(url, {
             headers: { Authorization: 'Bearer ' + token }
         });
 
-        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to load folder');
+        if (!res.ok) {
+            const error = (await safeJson(res)).msg || 'Failed to load folder';
+            if (error.includes('removed from shares')) {
+                // Folder was deleted, reload network files list
+                showMessage(error, 'error', 'mainAlert');
+                loadNetworkFiles();
+                return;
+            }
+            throw new Error(error);
+        }
 
         const data = await safeJson(res);
 
-        const modal = document.createElement('div');
-        modal.className = 'preview-modal';
-        modal.onclick = (e) => {
-            if (e.target === modal) modal.remove();
-        };
-
-        const content = document.createElement('div');
-        content.className = 'preview-content';
-        content.style.maxHeight = '80vh';
-        content.style.overflow = 'auto';
-        content.style.padding = '2rem';
-
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'preview-close';
-        closeBtn.innerHTML = '×';
-        closeBtn.onclick = () => modal.remove();
-
-        let html = `
-            <h2 style="margin-bottom: 1rem; color: var(--text-primary); font-family: 'Syne', sans-serif;">📁 ${escapeHtml(data.folder.folder_name)}</h2>
-            <p style="margin-bottom: 0.5rem; color: var(--text-secondary);">Shared by ${escapeHtml(data.folder.username)}</p>
-        `;
-
-        // Add breadcrumb for subfolders
-        if (subPath) {
-            const parts = subPath.split('/');
-            let breadcrumb = `<div style="margin-bottom: 1rem; color: var(--text-secondary);">
-                <span onclick="viewNetworkFolder('${folderId}')" style="cursor: pointer; color: var(--primary);">Root</span>`;
-            
-            let currentPath = '';
+        // Build breadcrumb for network folder navigation
+        let breadcrumb = `<span class="breadcrumb-item" onclick="loadNetworkFiles(); event.stopPropagation();">Network</span>`;
+        breadcrumb += ` / <span class="breadcrumb-item" onclick="viewNetworkFolder('${escapeHtml(folderId)}', ''); event.stopPropagation();">${escapeHtml(data.folder.folder_name)}</span>`;
+        
+        if (currentNetworkSubfolder) {
+            const parts = currentNetworkSubfolder.split('/');
+            let pathBuild = '';
             parts.forEach((part, idx) => {
-                currentPath += (currentPath ? '/' : '') + part;
-                const path = currentPath;
-                if (idx < parts.length - 1) {
-                    breadcrumb += ` / <span onclick="viewNetworkFolder('${folderId}', '${path}')" style="cursor: pointer; color: var(--primary);">${escapeHtml(part)}</span>`;
+                pathBuild += (pathBuild ? '/' : '') + part;
+                const navPath = pathBuild;
+                if (idx === parts.length - 1) {
+                    breadcrumb += ` / <span class="breadcrumb-item active">${escapeHtml(part)}</span>`;
                 } else {
-                    breadcrumb += ` / <span>${escapeHtml(part)}</span>`;
+                    breadcrumb += ` / <span class="breadcrumb-item" onclick="viewNetworkFolder('${escapeHtml(folderId)}', '${escapeHtml(navPath)}'); event.stopPropagation();">${escapeHtml(part)}</span>`;
                 }
             });
-            breadcrumb += '</div>';
-            html += breadcrumb;
         }
 
-        if (data.files.length === 0 && data.subfolders.length === 0) {
+        // Build file list HTML
+        let html = '';
+        
+        // Add back button
+        html += `
+            <div class="card">
+                <button class="btn btn-secondary" onclick="loadNetworkFiles()">← Back to Network</button>
+            </div>
+        `;
+
+        // Add breadcrumb
+        html += `<div class="breadcrumb-container"><div class="breadcrumb">${breadcrumb}</div></div>`;
+
+        if (data.folders && data.folders.length > 0) {
+            html += '<div class="section-header">Folders</div>';
+            html += data.folders.map(folder => {
+                const fullPath = folder.relative_path;
+                return `
+                    <div class="list-item">
+                        <div class="item-info">
+                            <div class="item-name folder-item" onclick="viewNetworkFolder('${escapeHtml(folderId)}', '${escapeHtml(fullPath)}')">
+                                📁 ${escapeHtml(folder.name)}
+                            </div>
+                            <div class="item-meta">${formatDate(folder.modified)}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        if (data.files && data.files.length > 0) {
+            html += '<div class="section-header">Files</div>';
+            html += data.files.map(file => {
+                const canPreview = file.file_type !== 'other';
+                return `
+                    <div class="list-item">
+                        <div class="item-info">
+                            <div class="item-name">${getFileIcon(file.file_type)} ${escapeHtml(file.filename)}</div>
+                            <div class="item-meta">${formatSize(file.file_size)} • ${formatDate(file.modified)}</div>
+                        </div>
+                        <div class="item-actions">
+                            ${canPreview ? `<button class="btn btn-secondary btn-small" onclick="previewFile('${escapeHtml(file.filepath)}')">Preview</button>` : ''}
+                            <button class="btn btn-primary btn-small" onclick="downloadFile('${escapeHtml(file.filepath)}')">Download</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        if (data.folders.length === 0 && data.files.length === 0) {
             html += '<div class="empty-state"><div class="empty-state-icon">📁</div><div class="empty-state-text">This folder is empty</div></div>';
-        } else {
-            // Show subfolders first
-            if (data.subfolders && data.subfolders.length > 0) {
-                html += '<div class="section-header" style="margin-top: 1.5rem;">Folders</div>';
-                data.subfolders.forEach(subfolder => {
-                    html += `
-                        <div class="list-item" style="margin-bottom: 0.75rem; cursor: pointer;" onclick="event.stopPropagation(); viewNetworkFolder('${folderId}', '${escapeHtml(subfolder.relative_path)}')">
-                            <div class="item-info">
-                                <div class="item-name">📁 ${escapeHtml(subfolder.name)}</div>
-                            </div>
-                        </div>
-                    `;
-                });
-            }
-
-            // Show files
-            if (data.files && data.files.length > 0) {
-                html += '<div class="section-header" style="margin-top: 1.5rem;">Files</div>';
-                data.files.forEach(file => {
-                    const canPreview = file.file_type !== 'other';
-                    html += `
-                        <div class="list-item" style="margin-bottom: 0.75rem;">
-                            <div class="item-info">
-                                <div class="item-name">${getFileIcon(file.file_type)} ${escapeHtml(file.relative_path)}</div>
-                                <div class="item-meta">${formatSize(file.file_size)}</div>
-                            </div>
-                            <div class="item-actions">
-                                ${canPreview ? `<button class="btn btn-secondary btn-small" onclick="previewFile('${escapeHtml(file.filepath)}')">Preview</button>` : ''}
-                                <button class="btn btn-primary btn-small" onclick="downloadFile('${escapeHtml(file.filepath)}')">Download</button>
-                            </div>
-                        </div>
-                    `;
-                });
-            }
         }
 
-        content.innerHTML = html;
-        content.insertBefore(closeBtn, content.firstChild);
-        modal.appendChild(content);
-        document.body.appendChild(modal);
+        document.getElementById('networkList').innerHTML = html;
 
     } catch (e) {
         showMessage(e.message, 'error', 'mainAlert');
@@ -1309,41 +1410,15 @@ async function loadUsers() {
                             👤 ${escapeHtml(user.username)}
                             <span class="badge badge-${user.role}">${user.role}</span>
                             <span class="badge badge-${user.status}">${user.status}</span>
-                            ${user.auto_share ? '<span class="badge badge-shared">Auto-share</span>' : ''}
                         </div>
                         <div class="item-meta">Created: ${formatDate(new Date(user.created_at).getTime() / 1000)} • Storage: ${formatSize(user.storage_used)}</div>
                     </div>
                     <div class="item-actions">
-                        ${user.username !== 'admin' ? `
-                            <button class="btn btn-secondary btn-small" onclick="toggleAutoShare('${escapeHtml(user.username)}', ${!user.auto_share})">${user.auto_share ? 'Disable' : 'Enable'} Auto-share</button>
-                            <button class="btn btn-danger btn-small" onclick="removeUser('${escapeHtml(user.username)}')">Delete</button>
-                        ` : ''}
+                        ${user.username !== 'admin' ? `<button class="btn btn-danger btn-small" onclick="removeUser('${escapeHtml(user.username)}')">Delete</button>` : ''}
                     </div>
                 </div>
             `).join('');
         }
-
-    } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
-    }
-}
-
-async function toggleAutoShare(username, enable) {
-    try {
-        const res = await fetch(`/api/users/${encodeURIComponent(username)}/auto-share`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + token
-            },
-            body: JSON.stringify({ auto_share: enable })
-        });
-
-        if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to update auto-share');
-
-        const data = await safeJson(res);
-        showMessage(data.msg, 'success', 'mainAlert');
-        loadUsers();
 
     } catch (e) {
         showMessage(e.message, 'error', 'mainAlert');
@@ -1387,7 +1462,6 @@ async function addUser() {
     const username = document.getElementById('newUsername').value.trim();
     const password = document.getElementById('newPassword').value;
     const role = document.getElementById('newRole').value;
-    const autoShare = document.getElementById('newAutoShare').checked;
 
     if (!username || !password) {
         showMessage('Please fill in all fields', 'error', 'mainAlert');
@@ -1401,7 +1475,7 @@ async function addUser() {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer ' + token
             },
-            body: JSON.stringify({ username, password, role, auto_share: autoShare })
+            body: JSON.stringify({ username, password, role })
         });
 
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to add user');
@@ -1412,7 +1486,6 @@ async function addUser() {
         document.getElementById('newUsername').value = '';
         document.getElementById('newPassword').value = '';
         document.getElementById('newRole').value = 'user';
-        document.getElementById('newAutoShare').checked = false;
 
         loadUsers();
 

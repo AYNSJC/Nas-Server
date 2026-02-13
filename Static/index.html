@@ -10,6 +10,18 @@
     <div id="navbar" style="display: none;">
         <div class="navbar">
             <div class="navbar-brand"><span>💾</span> <span>Network Storage</span></div>
+
+            <!-- Upload progress widget — always visible while uploading -->
+            <div id="uploadProgress" class="upload-progress-widget" style="display:none;">
+                <div class="upload-progress-bar-wrap">
+                    <div class="upload-progress-bar" id="uploadProgressBar"></div>
+                </div>
+                <div class="upload-progress-info">
+                    <span class="upload-progress-name" id="uploadProgressName"></span>
+                    <span class="upload-progress-count" id="uploadProgressCount"></span>
+                </div>
+            </div>
+
             <div class="navbar-user">
                 <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle theme">🌙</button>
                 <div class="user-badge" onclick="openSettings()" style="cursor: pointer;">
@@ -101,7 +113,7 @@
                 <div class="file-actions-bar">
                     <button class="btn btn-secondary" onclick="createFolder()">New Folder</button>
                     <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">Upload Files</button>
-                    <button class="btn btn-primary" onclick="document.getElementById('folderInput').click()">Upload Folder</button>
+                    <button class="btn btn-secondary" onclick="document.getElementById('folderInput').click()">Upload Folder</button>
                     <input type="file" id="fileInput" multiple style="display: none;" onchange="uploadFiles()">
                     <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;" onchange="uploadFolder()">
                 </div>
@@ -152,13 +164,6 @@
                         <option value="user">User</option>
                         <option value="admin">Admin</option>
                     </select>
-                </div>
-                <div class="form-group">
-                    <label style="display: flex; align-items: center; gap: 0.5rem; text-transform: none;">
-                        <input type="checkbox" id="newAutoShare" style="width: auto; margin: 0;">
-                        <span>Auto-share to network (no approval required)</span>
-                    </label>
-                    <small class="form-help">User can upload directly to network without admin approval</small>
                 </div>
                 <button class="btn btn-primary" onclick="addUser()">Add User</button>
             </div>
