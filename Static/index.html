@@ -4,14 +4,31 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Network Storage</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%234285f4'/%3E%3Cpath d='M30 35h40v8H30zm0 15h30v8H30zm0 15h25v8H30z' fill='white'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+    <!-- Top Navigation Bar -->
     <div id="navbar" style="display: none;">
         <div class="navbar">
-            <div class="navbar-brand"><span>💾</span> <span>Network Storage</span></div>
+            <div class="navbar-left">
+                <button class="menu-toggle" id="menuToggle" onclick="toggleSidebar()" title="Toggle menu">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="3" y1="12" x2="21" y2="12"></line>
+                        <line x1="3" y1="6" x2="21" y2="6"></line>
+                        <line x1="3" y1="18" x2="21" y2="18"></line>
+                    </svg>
+                </button>
+                <div class="navbar-brand">
+                    <svg width="32" height="32" viewBox="0 0 100 100">
+                        <rect width="100" height="100" rx="20" fill="#4285f4"/>
+                        <path d="M30 35h40v8H30zm0 15h30v8H30zm0 15h25v8H30z" fill="white"/>
+                    </svg>
+                    <span>Network Storage</span>
+                </div>
+            </div>
 
-            <!-- Upload progress widget — always visible while uploading -->
+            <!-- Upload progress widget -->
             <div id="uploadProgress" class="upload-progress-widget" style="display:none;">
                 <div class="upload-progress-bar-wrap">
                     <div class="upload-progress-bar" id="uploadProgressBar"></div>
@@ -23,59 +40,95 @@
             </div>
 
             <div class="navbar-user">
-                <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle theme">🌙</button>
+                <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle theme">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                </button>
                 <div class="user-badge" onclick="openSettings()" style="cursor: pointer;">
-                    <span id="navUsername"></span><span id="navRole"></span>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                    <span id="navUsername"></span>
                 </div>
-                <button class="btn btn-secondary btn-small" onclick="logout()">Logout</button>
+                <button class="btn btn-text" onclick="logout()">Sign out</button>
             </div>
         </div>
     </div>
 
+    <!-- Login/Register Container -->
     <div id="authContainer" class="auth-container">
-        <div class="card">
+        <div class="auth-card">
+            <div class="auth-logo">
+                <svg width="64" height="64" viewBox="0 0 100 100">
+                    <rect width="100" height="100" rx="20" fill="#4285f4"/>
+                    <path d="M30 35h40v8H30zm0 15h30v8H30zm0 15h25v8H30z" fill="white"/>
+                </svg>
+            </div>
             <div id="alert" class="alert"></div>
+            
             <div id="loginView">
-                <div class="card-header">Welcome Back</div>
+                <h1 class="auth-title">Sign in</h1>
+                <p class="auth-subtitle">to continue to Network Storage</p>
+                
                 <div class="form-group">
                     <label>Username</label>
-                    <input type="text" id="loginUsername" placeholder="Enter username" autocomplete="username">
+                    <input type="text" id="loginUsername" placeholder="Enter your username" autocomplete="username">
                 </div>
                 <div class="form-group">
                     <label>Password</label>
                     <div class="password-input">
-                        <input type="password" id="loginPassword" placeholder="Enter password" autocomplete="current-password">
-                        <button type="button" class="password-toggle" id="loginPasswordToggle" onclick="togglePassword('loginPassword', 'loginPasswordToggle')" title="Show password">👁️</button>
+                        <input type="password" id="loginPassword" placeholder="Enter your password" autocomplete="current-password">
+                        <button type="button" class="password-toggle" id="loginPasswordToggle" onclick="togglePassword('loginPassword', 'loginPasswordToggle')" title="Show password">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                        </button>
                     </div>
                 </div>
-                <button class="btn btn-primary btn-block" onclick="login()">Sign In</button>
+                <button class="btn btn-primary btn-block" onclick="login()">Sign in</button>
                 <div class="text-center mt-3">
-                    <a class="text-link" onclick="showRegister()">Don't have an account? Register</a>
+                    <a class="text-link" onclick="showRegister()">Create account</a>
                 </div>
             </div>
 
             <div id="registerView" style="display: none;">
-                <div class="card-header">Create Account</div>
+                <h1 class="auth-title">Create account</h1>
+                <p class="auth-subtitle">for Network Storage</p>
+                
                 <div class="form-group">
                     <label>Username</label>
-                    <input type="text" id="regUsername" placeholder="Choose username (3-32 characters)" autocomplete="username">
-                    <small class="form-help">Only letters, numbers, and underscores</small>
+                    <input type="text" id="regUsername" placeholder="Choose username" autocomplete="username">
+                    <small class="form-help">3-32 characters, letters, numbers, and underscores only</small>
                 </div>
                 <div class="form-group">
                     <label>Password</label>
                     <div class="password-input">
-                        <input type="password" id="regPassword" placeholder="Choose password (min 6 characters)" autocomplete="new-password">
-                        <button type="button" class="password-toggle" id="regPasswordToggle" onclick="togglePassword('regPassword', 'regPasswordToggle')" title="Show password">👁️</button>
+                        <input type="password" id="regPassword" placeholder="Choose password" autocomplete="new-password">
+                        <button type="button" class="password-toggle" id="regPasswordToggle" onclick="togglePassword('regPassword', 'regPasswordToggle')" title="Show password">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                        </button>
                     </div>
+                    <small class="form-help">Minimum 6 characters</small>
                 </div>
                 <div class="form-group">
                     <label>Confirm Password</label>
                     <div class="password-input">
                         <input type="password" id="regPasswordConfirm" placeholder="Confirm password" autocomplete="new-password">
-                        <button type="button" class="password-toggle" id="regPasswordConfirmToggle" onclick="togglePassword('regPasswordConfirm', 'regPasswordConfirmToggle')" title="Show password">👁️</button>
+                        <button type="button" class="password-toggle" id="regPasswordConfirmToggle" onclick="togglePassword('regPasswordConfirm', 'regPasswordConfirmToggle')" title="Show password">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                        </button>
                     </div>
                 </div>
-                <button class="btn btn-primary btn-block" onclick="register()">Register</button>
+                <button class="btn btn-primary btn-block" onclick="register()">Create account</button>
                 <div class="text-center mt-3">
                     <a class="text-link" onclick="showLogin()">Already have an account? Sign in</a>
                 </div>
@@ -83,111 +136,215 @@
         </div>
     </div>
 
-    <div id="mainContainer" class="container" style="display: none;">
-        <div id="mainAlert" class="alert"></div>
-        <div class="tabs">
-            <button class="tab active" onclick="showTab('files')">My Files</button>
-            <button class="tab" onclick="showTab('network')">Network</button>
-            <button class="tab" id="usersTab" onclick="showTab('users')" style="display: none;">Users</button>
-            <button class="tab" id="pendingTab" onclick="showTab('pending')" style="display: none;">User Approvals</button>
-            <button class="tab" id="sharesTab" onclick="showTab('shares')" style="display: none;">Share Requests</button>
-        </div>
-
-        <div class="tab-content active" id="filesContent">
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-label">Total Files</div>
-                    <div class="stat-value" id="fileCount">0</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Storage Used</div>
-                    <div class="stat-value" id="storageUsed">0 B</div>
-                </div>
-            </div>
-
-            <div class="breadcrumb-container">
-                <div id="breadcrumb" class="breadcrumb"></div>
-            </div>
-
-            <div class="card">
-                <div class="file-actions-bar">
-                    <button class="btn btn-secondary" onclick="createFolder()">New Folder</button>
-                    <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">Upload Files</button>
-                    <button class="btn btn-secondary" onclick="document.getElementById('folderInput').click()">Upload Folder</button>
-                    <input type="file" id="fileInput" multiple style="display: none;" onchange="uploadFiles()">
-                    <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;" onchange="uploadFolder()">
-                </div>
-            </div>
-
-            <div class="bulk-actions-bar" id="bulkActionsBar" style="display: none;">
-                <div class="bulk-actions-info">
-                    <span id="selectedCount">0</span> file(s) selected
-                </div>
-                <div class="bulk-actions-buttons">
-                    <button class="btn btn-secondary btn-small" onclick="selectAllFiles()">Select All</button>
-                    <button class="btn btn-secondary btn-small" onclick="clearSelection()">Clear</button>
-                    <button class="btn btn-primary btn-small" onclick="bulkMoveFiles()">Move</button>
-                    <button class="btn btn-success btn-small" onclick="bulkShareFiles()">Share</button>
-                    <button class="btn btn-danger btn-small" onclick="bulkDeleteFiles()">Delete</button>
+    <!-- Main Container with Sidebar -->
+    <div id="mainContainer" class="main-layout" style="display: none;">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-section">
+                <button class="btn btn-primary btn-block" onclick="document.getElementById('fileInput').click()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                    Upload Files
+                </button>
+                <input type="file" id="fileInput" multiple style="display: none;" onchange="uploadFiles()">
+                <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;" onchange="uploadFolder()">
+                
+                <div style="display: flex; gap: 8px; margin-top: 12px;">
+                    <button class="btn btn-text btn-block" onclick="document.getElementById('folderInput').click()" style="justify-content: center;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        Upload Folder
+                    </button>
+                    <button class="btn btn-text btn-block" onclick="createFolder()" style="justify-content: center;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                            <line x1="12" y1="11" x2="12" y2="17"></line>
+                            <line x1="9" y1="14" x2="15" y2="14"></line>
+                        </svg>
+                        New Folder
+                    </button>
                 </div>
             </div>
 
-            <div id="fileList"></div>
-        </div>
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" onclick="showTab('files'); return false;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                    My Files
+                </a>
+                <a href="#" class="nav-item" onclick="showTab('network'); return false;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="9" cy="7" r="4"></circle>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                    Shared with me
+                </a>
+            </nav>
 
-        <div class="tab-content" id="networkContent">
-            <div class="network-header">
-                <h2 class="network-title">Network Shared Files</h2>
-                <p class="network-subtitle">Access files shared by all users on the network</p>
+            <div class="sidebar-section">
+                <div class="sidebar-section-header">
+                    <span>Pinned Folders</span>
+                    <button class="icon-btn" onclick="addPinnedFolder()" title="Pin current folder">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                    </button>
+                </div>
+                <div id="pinnedFolders" class="pinned-folders"></div>
             </div>
 
-            <div id="networkList"></div>
-        </div>
-
-        <div class="tab-content" id="usersContent">
-            <div class="card">
-                <div class="card-header">Add New User</div>
-                <div class="form-group">
-                    <label>Username</label>
-                    <input type="text" id="newUsername" placeholder="Enter username">
+            <div class="sidebar-section storage-info">
+                <div class="storage-label">Storage</div>
+                <div class="storage-bar">
+                    <div class="storage-used" id="storageBar" style="width: 0%"></div>
                 </div>
-                <div class="form-group">
-                    <label>Password</label>
-                    <div class="password-input">
-                        <input type="password" id="newPassword" placeholder="Enter password">
-                        <button type="button" class="password-toggle" id="newPasswordToggle" onclick="togglePassword('newPassword', 'newPasswordToggle')" title="Show password">👁️</button>
+                <div class="storage-text">
+                    <span id="storageUsedText">0 B</span> used
+                </div>
+            </div>
+
+            <!-- Admin sections -->
+            <nav class="sidebar-nav admin-nav" id="adminNav" style="display: none;">
+                <div class="nav-divider"></div>
+                <div class="nav-section-title">Administration</div>
+                <a href="#" class="nav-item" id="usersNavItem" onclick="showTab('users'); return false;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="9" cy="7" r="4"></circle>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                    Users
+                </a>
+                <a href="#" class="nav-item" id="pendingNavItem" onclick="showTab('pending'); return false;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polyline points="12 6 12 12 16 14"></polyline>
+                    </svg>
+                    Pending Users
+                </a>
+                <a href="#" class="nav-item" id="sharesNavItem" onclick="showTab('shares'); return false;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="18" cy="5" r="3"></circle>
+                        <circle cx="6" cy="12" r="3"></circle>
+                        <circle cx="18" cy="19" r="3"></circle>
+                        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+                    </svg>
+                    Share Requests
+                </a>
+            </nav>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <div id="mainAlert" class="alert"></div>
+
+            <!-- My Files Tab -->
+            <div class="tab-content active" id="filesContent">
+                <div class="content-header">
+                    <div class="breadcrumb-container">
+                        <div id="breadcrumb" class="breadcrumb"></div>
                     </div>
                 </div>
-                <div class="form-group">
-                    <label>Role</label>
-                    <select id="newRole">
-                        <option value="user">User</option>
-                        <option value="admin">Admin</option>
-                    </select>
+
+                <div class="bulk-actions-bar" id="bulkActionsBar" style="display: none;">
+                    <div class="bulk-actions-info">
+                        <span id="selectedCount">0</span> selected
+                    </div>
+                    <div class="bulk-actions-buttons">
+                        <button class="btn btn-text" onclick="clearSelection()">Clear</button>
+                        <button class="btn btn-text" onclick="bulkMoveFiles()">Move</button>
+                        <button class="btn btn-text" onclick="bulkShareFiles()">Share</button>
+                        <button class="btn btn-text btn-danger-text" onclick="bulkDeleteFiles()">Delete</button>
+                    </div>
                 </div>
-                <button class="btn btn-primary" onclick="addUser()">Add User</button>
+
+                <div id="fileList"></div>
             </div>
 
-            <div class="card">
-                <div class="card-header">All Users</div>
-                <div id="userList"></div>
-            </div>
-        </div>
+            <!-- Network/Shared Tab -->
+            <div class="tab-content" id="networkContent">
+                <div class="content-header">
+                    <h2 class="content-title">Shared with me</h2>
+                </div>
 
-        <div class="tab-content" id="pendingContent">
-            <div class="card">
-                <div class="card-header">Pending User Approvals</div>
+                <div class="bulk-actions-bar" id="networkBulkActionsBar" style="display: none;">
+                    <div class="bulk-actions-info">
+                        <span id="networkSelectedCount">0</span> selected
+                    </div>
+                    <div class="bulk-actions-buttons">
+                        <button class="btn btn-text" onclick="clearNetworkSelection()">Clear</button>
+                        <button class="btn btn-text" onclick="bulkDownloadNetwork()">Download</button>
+                    </div>
+                </div>
+
+                <div id="networkList"></div>
+            </div>
+
+            <!-- Users Tab (Admin) -->
+            <div class="tab-content" id="usersContent">
+                <div class="content-header">
+                    <h2 class="content-title">User Management</h2>
+                </div>
+
+                <div class="admin-card">
+                    <h3>Add New User</h3>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Username</label>
+                            <input type="text" id="newUsername" placeholder="Enter username">
+                        </div>
+                        <div class="form-group">
+                            <label>Password</label>
+                            <input type="password" id="newPassword" placeholder="Enter password">
+                        </div>
+                        <div class="form-group">
+                            <label>Role</label>
+                            <select id="newRole">
+                                <option value="user">User</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>&nbsp;</label>
+                            <button class="btn btn-primary" onclick="addUser()">Add User</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="admin-card">
+                    <h3>All Users</h3>
+                    <div id="userList"></div>
+                </div>
+            </div>
+
+            <!-- Pending Users Tab (Admin) -->
+            <div class="tab-content" id="pendingContent">
+                <div class="content-header">
+                    <h2 class="content-title">Pending User Approvals</h2>
+                </div>
                 <div id="pendingList"></div>
             </div>
-        </div>
 
-        <div class="tab-content" id="sharesContent">
-            <div class="card">
-                <div class="card-header">Pending Share Requests</div>
-                <p style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 1rem;">Review and approve files that users want to share on the network</p>
+            <!-- Share Requests Tab (Admin) -->
+            <div class="tab-content" id="sharesContent">
+                <div class="content-header">
+                    <h2 class="content-title">Pending Share Requests</h2>
+                    <p class="content-subtitle">Review and approve files that users want to share</p>
+                </div>
                 <div id="sharesList"></div>
             </div>
-        </div>
+        </main>
     </div>
 
     <script src="/static/app.js"></script>

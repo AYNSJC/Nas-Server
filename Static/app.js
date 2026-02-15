@@ -10,7 +10,14 @@ let currentPreviewIndex = -1;
 let currentNetworkFolderId = null;
 let currentNetworkSubfolder = '';
 
-/* Upload queue state — tracks all files queued across uploadFiles() + uploadFolder() calls */
+// Network selection state
+let selectedNetworkItems = new Set();
+let allNetworkItems = [];
+
+// Pinned folders state
+let pinnedFolders = JSON.parse(localStorage.getItem('pinnedFolders') || '[]');
+
+/* Upload queue state */
 const uploadQueue = { total: 0, done: 0, active: '' };
 
 function uploadProgressShow() {
@@ -29,19 +36,14 @@ function uploadProgressUpdate(filename, chunkPct) {
     document.getElementById('uploadProgressName').textContent = filename;
     document.getElementById('uploadProgressCount').textContent =
         remaining + ' file' + (remaining !== 1 ? 's' : '') + ' left';
-    // Progress bar reflects chunk progress within current file
     document.getElementById('uploadProgressBar').style.width = chunkPct + '%';
 }
 
 // Theme management
 function initTheme() {
-    const savedTheme = localStorage.getItem('theme');
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    
-    // Auto-select light mode by default, unless user has saved preference
-    const theme = savedTheme || 'light';
-    document.documentElement.setAttribute('data-theme', theme);
-    updateThemeIcon(theme);
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    updateThemeIcon(savedTheme);
 }
 
 function toggleTheme() {
@@ -56,15 +58,135 @@ function toggleTheme() {
 function updateThemeIcon(theme) {
     const themeToggle = document.getElementById('themeToggle');
     if (themeToggle) {
-        themeToggle.innerHTML = theme === 'dark' ? '☀️' : '🌙';
+        themeToggle.innerHTML = theme === 'dark' 
+            ? '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>'
+            : '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>';
         themeToggle.title = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
     }
+}
+
+// Sidebar toggle
+function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    sidebar.classList.toggle('show');
 }
 
 // Initialize theme on page load
 initTheme();
 
 if (token) showMainPanel();
+
+/* =======================
+   PINNED FOLDERS
+   ======================= */
+function addPinnedFolder() {
+    if (!currentPath) {
+        showMessage('Navigate to a folder first', 'error', 'mainAlert');
+        return;
+    }
+    
+    // Check if already pinned
+    if (pinnedFolders.some(f => f.path === currentPath)) {
+        showMessage('Folder already pinned', 'error', 'mainAlert');
+        return;
+    }
+    
+    const folderName = currentPath.split('/').pop() || 'Root';
+    pinnedFolders.push({ path: currentPath, name: folderName });
+    localStorage.setItem('pinnedFolders', JSON.stringify(pinnedFolders));
+    renderPinnedFolders();
+    showMessage('Folder pinned', 'success', 'mainAlert');
+}
+
+function unpinFolder(path) {
+    pinnedFolders = pinnedFolders.filter(f => f.path !== path);
+    localStorage.setItem('pinnedFolders', JSON.stringify(pinnedFolders));
+    renderPinnedFolders();
+}
+
+function renderPinnedFolders() {
+    const container = document.getElementById('pinnedFolders');
+    if (!container) return;
+    
+    if (pinnedFolders.length === 0) {
+        container.innerHTML = '<div style="font-size: 12px; color: var(--text-tertiary); padding: 8px 12px;">No pinned folders</div>';
+        return;
+    }
+    
+    container.innerHTML = pinnedFolders.map(folder => `
+        <div class="pinned-folder-item" onclick="loadFiles('${escapeHtml(folder.path)}')">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(folder.name)}</span>
+            <button class="unpin-btn" onclick="unpinFolder('${escapeHtml(folder.path)}'); event.stopPropagation();" title="Unpin">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+        </div>
+    `).join('');
+}
+
+/* =======================
+   NETWORK MULTI-SELECT
+   ======================= */
+function toggleNetworkItemSelection(itemId) {
+    if (selectedNetworkItems.has(itemId)) {
+        selectedNetworkItems.delete(itemId);
+    } else {
+        selectedNetworkItems.add(itemId);
+    }
+    updateNetworkListUI();
+    updateNetworkBulkActionsBar();
+}
+
+function clearNetworkSelection() {
+    selectedNetworkItems.clear();
+    updateNetworkListUI();
+    updateNetworkBulkActionsBar();
+}
+
+function updateNetworkBulkActionsBar() {
+    const bar = document.getElementById('networkBulkActionsBar');
+    const count = document.getElementById('networkSelectedCount');
+    
+    if (selectedNetworkItems.size > 0) {
+        bar.style.display = 'flex';
+        count.textContent = selectedNetworkItems.size;
+    } else {
+        bar.style.display = 'none';
+    }
+}
+
+function updateNetworkListUI() {
+    document.querySelectorAll('.network-checkbox').forEach(checkbox => {
+        const itemId = checkbox.dataset.itemid;
+        checkbox.checked = selectedNetworkItems.has(itemId);
+        
+        const listItem = checkbox.closest('.list-item');
+        if (selectedNetworkItems.has(itemId)) {
+            listItem.classList.add('selected');
+        } else {
+            listItem.classList.remove('selected');
+        }
+    });
+}
+
+async function bulkDownloadNetwork() {
+    if (selectedNetworkItems.size === 0) return;
+    
+    for (const itemId of selectedNetworkItems) {
+        const item = allNetworkItems.find(i => i.id === itemId);
+        if (item) {
+            downloadNetworkFile(itemId);
+            await new Promise(resolve => setTimeout(resolve, 100)); // Small delay between downloads
+        }
+    }
+    
+    showMessage(`Downloading ${selectedNetworkItems.size} file(s)`, 'success', 'mainAlert');
+}
 
 /* =======================
    SAFE JSON PARSER
@@ -105,20 +227,25 @@ function togglePassword(inputId, buttonId) {
 
     if (input.type === 'password') {
         input.type = 'text';
-        button.innerHTML = '🙈';
+        button.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
         button.title = 'Hide password';
     } else {
         input.type = 'password';
-        button.innerHTML = '👁️';
+        button.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
         button.title = 'Show password';
     }
 }
 
 function showTab(tabName) {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    // Update sidebar nav
+    document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+    const navItem = Array.from(document.querySelectorAll('.nav-item')).find(item => 
+        item.getAttribute('onclick')?.includes(`showTab('${tabName}')`)
+    );
+    if (navItem) navItem.classList.add('active');
 
-    event.target.classList.add('active');
+    // Update content
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     document.getElementById(tabName + 'Content').classList.add('active');
 
     if (tabName === 'files') {
@@ -130,9 +257,9 @@ function showTab(tabName) {
     } else if (tabName === 'shares') {
         loadPendingShares();
     } else if (tabName === 'network') {
-        // Reset network navigation state
         currentNetworkFolderId = null;
         currentNetworkSubfolder = '';
+        selectedNetworkItems.clear();
         loadNetworkFiles();
     }
 }
@@ -163,21 +290,36 @@ function openSettings() {
                         <label>Current Password</label>
                         <div class="password-input">
                             <input type="password" id="currentPassword" placeholder="Enter current password">
-                            <button type="button" class="password-toggle" onclick="togglePassword('currentPassword', this)">👁️</button>
+                            <button type="button" class="password-toggle" onclick="togglePassword('currentPassword', this)">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                    <circle cx="12" cy="12" r="3"></circle>
+                                </svg>
+                            </button>
                         </div>
                     </div>
                     <div class="form-group">
                         <label>New Password</label>
                         <div class="password-input">
                             <input type="password" id="newPassword" placeholder="Enter new password (min 6 characters)">
-                            <button type="button" class="password-toggle" onclick="togglePassword('newPassword', this)">👁️</button>
+                            <button type="button" class="password-toggle" onclick="togglePassword('newPassword', this)">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                    <circle cx="12" cy="12" r="3"></circle>
+                                </svg>
+                            </button>
                         </div>
                     </div>
                     <div class="form-group">
                         <label>Confirm New Password</label>
                         <div class="password-input">
                             <input type="password" id="confirmNewPassword" placeholder="Confirm new password">
-                            <button type="button" class="password-toggle" onclick="togglePassword('confirmNewPassword', this)">👁️</button>
+                            <button type="button" class="password-toggle" onclick="togglePassword('confirmNewPassword', this)">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                    <circle cx="12" cy="12" r="3"></circle>
+                                </svg>
+                            </button>
                         </div>
                     </div>
                     <button class="btn btn-primary" onclick="changePassword()">Update Password</button>
@@ -194,7 +336,12 @@ function openSettings() {
                         <label>Confirm Password</label>
                         <div class="password-input">
                             <input type="password" id="confirmPasswordUsername" placeholder="Enter your password to confirm">
-                            <button type="button" class="password-toggle" onclick="togglePassword('confirmPasswordUsername', this)">👁️</button>
+                            <button type="button" class="password-toggle" onclick="togglePassword('confirmPasswordUsername', this)">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                    <circle cx="12" cy="12" r="3"></circle>
+                                </svg>
+                            </button>
                         </div>
                     </div>
                     <button class="btn btn-primary" onclick="changeUsername()">Update Username</button>
@@ -202,7 +349,7 @@ function openSettings() {
 
                 <div class="settings-section">
                     <h3 class="settings-section-title">Account Information</h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 0.5rem;"><strong>Username:</strong> ${currentUser}</p>
+                    <p style="color: var(--text-secondary); margin-bottom: 8px;"><strong>Username:</strong> ${currentUser}</p>
                     <p style="color: var(--text-secondary);"><strong>Role:</strong> ${userRole}</p>
                 </div>
             </div>
@@ -253,7 +400,6 @@ async function changePassword() {
         const data = await safeJson(res);
         showMessage(data.msg, 'success', 'settingsAlert');
         
-        // Clear form
         document.getElementById('currentPassword').value = '';
         document.getElementById('newPassword').value = '';
         document.getElementById('confirmNewPassword').value = '';
@@ -297,7 +443,6 @@ async function changeUsername() {
 
         const data = await safeJson(res);
         
-        // Update local storage with new token and username
         token = data.access_token;
         currentUser = data.new_username;
         localStorage.setItem('token', token);
@@ -305,7 +450,6 @@ async function changeUsername() {
 
         showMessage(data.msg + '. Refreshing...', 'success', 'settingsAlert');
         
-        // Refresh page after 1 second
         setTimeout(() => {
             location.reload();
         }, 1000);
@@ -338,7 +482,6 @@ async function login() {
             const error = (await safeJson(res)).msg || 'Login failed';
             showMessage(error, 'error');
             
-            // Clear password and wait 2 seconds then show login page
             loginPassword.value = '';
             setTimeout(() => {
                 showLogin();
@@ -406,23 +549,20 @@ function logout() {
    ======================= */
 function showMainPanel() {
     authContainer.style.display = 'none';
-    mainContainer.style.display = 'block';
+    mainContainer.style.display = 'flex';
     navbar.style.display = 'block';
 
     navUsername.textContent = currentUser;
-    navRole.textContent = ' • ' + userRole;
 
-    // Initialize theme toggle
     const currentTheme = document.documentElement.getAttribute('data-theme');
     updateThemeIcon(currentTheme);
 
     if (userRole === 'admin') {
-        usersTab.style.display = 'block';
-        pendingTab.style.display = 'block';
-        sharesTab.style.display = 'block';
+        document.getElementById('adminNav').style.display = 'block';
     }
 
     currentPath = '';
+    renderPinnedFolders();
     loadFiles();
 }
 
@@ -562,7 +702,6 @@ async function bulkShareFiles() {
     }
 }
 
-/* Always fetch stats from root regardless of which folder we're browsing */
 async function loadGlobalStats() {
     try {
         const res = await fetch('/api/stats', {
@@ -570,8 +709,11 @@ async function loadGlobalStats() {
         });
         if (!res.ok) return;
         const data = await safeJson(res);
-        fileCount.textContent   = data.total_files;
-        storageUsed.textContent = data.total_size_formatted;
+        
+        // Update storage bar
+        const percentage = Math.min(100, (data.total_size / (10 * 1024 * 1024 * 1024)) * 100); // Assume 10GB limit
+        document.getElementById('storageBar').style.width = percentage + '%';
+        document.getElementById('storageUsedText').textContent = data.total_size_formatted;
     } catch (e) { /* silently ignore */ }
 }
 
@@ -589,9 +731,7 @@ async function loadFiles(path = '') {
 
         const data = await safeJson(res);
 
-        // Stats always show global totals — loaded separately
         loadGlobalStats();
-
         updateBreadcrumb(currentPath);
 
         const fileListEl = document.getElementById('fileList');
@@ -605,14 +745,17 @@ async function loadFiles(path = '') {
                 <div class="list-item">
                     <div class="item-info">
                         <div class="item-name folder-item" onclick="loadFiles('${escapeHtml(folderPath)}')">
-                            📁 ${escapeHtml(folder.name)}
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                            </svg>
+                            ${escapeHtml(folder.name)}
                             ${folder.is_shared ? '<span class="badge badge-shared">Shared</span>' : ''}
                         </div>
                         <div class="item-meta">${formatDate(folder.modified)}</div>
                     </div>
                     <div class="item-actions">
-                        ${!folder.is_shared ? `<button class="btn btn-success btn-small" onclick="requestFolderShare('${escapeHtml(folderPath)}'); event.stopPropagation();">Share Folder</button>` : ''}
-                        <button class="btn btn-danger btn-small" onclick="deleteFolder('${escapeHtml(folderPath)}'); event.stopPropagation();">Delete</button>
+                        ${!folder.is_shared ? `<button class="btn btn-text" onclick="requestFolderShare('${escapeHtml(folderPath)}'); event.stopPropagation();">Share</button>` : ''}
+                        <button class="btn btn-text btn-danger-text" onclick="deleteFolder('${escapeHtml(folderPath)}'); event.stopPropagation();">Delete</button>
                     </div>
                 </div>
             `;
@@ -629,10 +772,10 @@ async function loadFiles(path = '') {
 
                 return `
                     <div class="list-item">
-                        <div class="item-info" style="display: flex; align-items: center; gap: 1rem;">
+                        <div class="item-info" style="display: flex; align-items: center; gap: 12px;">
                             <input type="checkbox" class="file-checkbox" data-filepath="${escapeHtml(filePath)}" 
                                    onclick="toggleFileSelection('${escapeHtml(filePath)}'); event.stopPropagation();">
-                            <div>
+                            <div style="flex: 1;">
                                 <div class="item-name">
                                     ${getFileIcon(file.type)} ${escapeHtml(file.name)}
                                     ${file.is_shared ? '<span class="badge badge-shared">Shared</span>' : ''}
@@ -641,10 +784,10 @@ async function loadFiles(path = '') {
                             </div>
                         </div>
                         <div class="item-actions">
-                            ${canPreview ? `<button class="btn btn-secondary btn-small" onclick="previewFile('${escapeHtml(filePath)}', ${index})">Preview</button>` : ''}
-                            <button class="btn btn-primary btn-small" onclick="downloadFile('${escapeHtml(filePath)}')">Download</button>
-                            ${!file.is_shared ? `<button class="btn btn-success btn-small" onclick="requestShare('${escapeHtml(filePath)}')">Share</button>` : ''}
-                            <button class="btn btn-danger btn-small" onclick="deleteFile('${escapeHtml(filePath)}')">Delete</button>
+                            ${canPreview ? `<button class="btn btn-text" onclick="previewFile('${escapeHtml(filePath)}', ${index})">Preview</button>` : ''}
+                            <button class="btn btn-text" onclick="downloadFile('${escapeHtml(filePath)}')">Download</button>
+                            ${!file.is_shared ? `<button class="btn btn-text" onclick="requestShare('${escapeHtml(filePath)}')">Share</button>` : ''}
+                            <button class="btn btn-text btn-danger-text" onclick="deleteFile('${escapeHtml(filePath)}')">Delete</button>
                         </div>
                     </div>
                 `;
@@ -667,22 +810,24 @@ function updateBreadcrumb(path) {
     const breadcrumbEl = document.getElementById('breadcrumb');
 
     if (!path) {
-        breadcrumbEl.innerHTML = '<span class="breadcrumb-item active">Home</span>';
+        breadcrumbEl.innerHTML = '<span class="breadcrumb-item active">My Files</span>';
         return;
     }
 
     const parts = path.split('/');
-    let html = '<span class="breadcrumb-item" onclick="loadFiles()">Home</span>';
+    let html = '<span class="breadcrumb-item" onclick="loadFiles()">My Files</span>';
 
     let currentPathBuild = '';
     parts.forEach((part, index) => {
         currentPathBuild += (currentPathBuild ? '/' : '') + part;
         const pathToNavigate = currentPathBuild;
 
+        html += ' / ';
+
         if (index === parts.length - 1) {
-            html += ` / <span class="breadcrumb-item active">${escapeHtml(part)}</span>`;
+            html += `<span class="breadcrumb-item active">${escapeHtml(part)}</span>`;
         } else {
-            html += ` / <span class="breadcrumb-item" onclick="loadFiles('${escapeHtml(pathToNavigate)}')">${escapeHtml(part)}</span>`;
+            html += `<span class="breadcrumb-item" onclick="loadFiles('${escapeHtml(pathToNavigate)}')">${escapeHtml(part)}</span>`;
         }
     });
 
@@ -691,15 +836,16 @@ function updateBreadcrumb(path) {
 
 function getFileIcon(type) {
     const icons = {
-        'image': '🖼️',
-        'pdf': '📄',
-        'text': '📝',
-        'docx': '📘',
-        'xlsx': '📊',
-        'other': '📎'
+        'image': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>',
+        'pdf': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>',
+        'text': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><line x1="10" y1="9" x2="8" y2="9"></line></svg>',
+        'docx': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>',
+        'xlsx': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>',
+        'other': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>'
     };
-    return icons[type] || '📎';
+    return icons[type] || icons['other'];
 }
+
 async function createFolder() {
     const folderName = prompt('Enter folder name:');
     if (!folderName || !folderName.trim()) return;
@@ -789,7 +935,6 @@ async function uploadWithChunks(file, folder, relPath) {
         });
 
         if (!res.ok) {
-            // Cancel remaining chunks server-side
             fetch('/api/upload/chunk/cancel', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
@@ -823,7 +968,6 @@ async function uploadFiles() {
 
     fileInput.value = '';
 
-    // Refresh file list + global stats
     await loadFiles(currentPath);
     await loadGlobalStats();
 
@@ -1028,12 +1172,17 @@ async function loadPendingShares() {
                 html += data.folders.map(folder => `
                     <div class="list-item">
                         <div class="item-info">
-                            <div class="item-name">📁 ${escapeHtml(folder.folder_name)}</div>
+                            <div class="item-name">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                                </svg>
+                                ${escapeHtml(folder.folder_name)}
+                            </div>
                             <div class="item-meta">By ${escapeHtml(folder.username)} • ${formatDate(new Date(folder.requested_at).getTime() / 1000)}</div>
                         </div>
                         <div class="item-actions">
-                            <button class="btn btn-success btn-small" onclick="approveFolderShare('${escapeHtml(folder.id)}')">Approve</button>
-                            <button class="btn btn-danger btn-small" onclick="rejectFolderShare('${escapeHtml(folder.id)}')">Reject</button>
+                            <button class="btn btn-text" style="color: var(--success);" onclick="approveFolderShare('${escapeHtml(folder.id)}')">Approve</button>
+                            <button class="btn btn-text btn-danger-text" onclick="rejectFolderShare('${escapeHtml(folder.id)}')">Reject</button>
                         </div>
                     </div>
                 `).join('');
@@ -1048,8 +1197,8 @@ async function loadPendingShares() {
                             <div class="item-meta">By ${escapeHtml(share.username)} • ${formatSize(share.file_size)} • ${formatDate(new Date(share.requested_at).getTime() / 1000)}</div>
                         </div>
                         <div class="item-actions">
-                            <button class="btn btn-success btn-small" onclick="approveShare('${escapeHtml(share.id)}')">Approve</button>
-                            <button class="btn btn-danger btn-small" onclick="rejectShare('${escapeHtml(share.id)}')">Reject</button>
+                            <button class="btn btn-text" style="color: var(--success);" onclick="approveShare('${escapeHtml(share.id)}')">Approve</button>
+                            <button class="btn btn-text btn-danger-text" onclick="rejectShare('${escapeHtml(share.id)}')">Reject</button>
                         </div>
                     </div>
                 `).join('');
@@ -1152,6 +1301,11 @@ async function loadNetworkFiles() {
 
         const data = await safeJson(res);
 
+        allNetworkItems = [
+            ...data.files.map(f => ({ ...f, type: 'file' })),
+            ...data.folders.map(f => ({ ...f, type: 'folder' }))
+        ];
+
         const networkListEl = document.getElementById('networkList');
         let html = '';
 
@@ -1166,13 +1320,22 @@ async function loadNetworkFiles() {
 
                     return `
                         <div class="list-item">
-                            <div class="item-info">
-                                <div class="item-name folder-item" onclick="viewNetworkFolder('${escapeHtml(folder.id)}', '')">📁 ${escapeHtml(folder.folder_name)}</div>
-                                <div class="item-meta">Shared by ${escapeHtml(folder.username)} • ${formatDate(new Date(folder.approved_at).getTime() / 1000)}</div>
+                            <div class="item-info" style="display: flex; align-items: center; gap: 12px;">
+                                <input type="checkbox" class="network-checkbox" data-itemid="${escapeHtml(folder.id)}" 
+                                       onclick="toggleNetworkItemSelection('${escapeHtml(folder.id)}'); event.stopPropagation();">
+                                <div style="flex: 1;">
+                                    <div class="item-name folder-item" onclick="viewNetworkFolder('${escapeHtml(folder.id)}', '')">
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                                        </svg>
+                                        ${escapeHtml(folder.folder_name)}
+                                    </div>
+                                    <div class="item-meta">Shared by ${escapeHtml(folder.username)} • ${formatDate(new Date(folder.approved_at).getTime() / 1000)}</div>
+                                </div>
                             </div>
                             <div class="item-actions">
-                                <button class="btn btn-primary btn-small" onclick="viewNetworkFolder('${escapeHtml(folder.id)}', ''); event.stopPropagation();">Open Folder</button>
-                                ${(isOwner || isAdmin) ? `<button class="btn btn-danger btn-small" onclick="removeFolderShare('${escapeHtml(folder.id)}'); event.stopPropagation();">Remove</button>` : ''}
+                                <button class="btn btn-text" onclick="viewNetworkFolder('${escapeHtml(folder.id)}', ''); event.stopPropagation();">Open</button>
+                                ${(isOwner || isAdmin) ? `<button class="btn btn-text btn-danger-text" onclick="removeFolderShare('${escapeHtml(folder.id)}'); event.stopPropagation();">Remove</button>` : ''}
                             </div>
                         </div>
                     `;
@@ -1188,14 +1351,18 @@ async function loadNetworkFiles() {
 
                     return `
                         <div class="list-item">
-                            <div class="item-info">
-                                <div class="item-name">${getFileIcon(file.file_type)} ${escapeHtml(file.filename)}</div>
-                                <div class="item-meta">Shared by ${escapeHtml(file.username)} • ${formatSize(file.file_size)} • ${formatDate(new Date(file.approved_at).getTime() / 1000)}</div>
+                            <div class="item-info" style="display: flex; align-items: center; gap: 12px;">
+                                <input type="checkbox" class="network-checkbox" data-itemid="${escapeHtml(file.id)}" 
+                                       onclick="toggleNetworkItemSelection('${escapeHtml(file.id)}'); event.stopPropagation();">
+                                <div style="flex: 1;">
+                                    <div class="item-name">${getFileIcon(file.file_type)} ${escapeHtml(file.filename)}</div>
+                                    <div class="item-meta">Shared by ${escapeHtml(file.username)} • ${formatSize(file.file_size)} • ${formatDate(new Date(file.approved_at).getTime() / 1000)}</div>
+                                </div>
                             </div>
                             <div class="item-actions">
-                                ${canPreview ? `<button class="btn btn-secondary btn-small" onclick="previewNetworkFile('${escapeHtml(file.id)}')">Preview</button>` : ''}
-                                <button class="btn btn-primary btn-small" onclick="downloadNetworkFile('${escapeHtml(file.id)}')">Download</button>
-                                ${(isOwner || isAdmin) ? `<button class="btn btn-danger btn-small" onclick="removeNetworkShare('${escapeHtml(file.id)}')">Remove</button>` : ''}
+                                ${canPreview ? `<button class="btn btn-text" onclick="previewNetworkFile('${escapeHtml(file.id)}')">Preview</button>` : ''}
+                                <button class="btn btn-text" onclick="downloadNetworkFile('${escapeHtml(file.id)}')">Download</button>
+                                ${(isOwner || isAdmin) ? `<button class="btn btn-text btn-danger-text" onclick="removeNetworkShare('${escapeHtml(file.id)}')">Remove</button>` : ''}
                             </div>
                         </div>
                     `;
@@ -1204,6 +1371,7 @@ async function loadNetworkFiles() {
         }
 
         networkListEl.innerHTML = html;
+        updateNetworkBulkActionsBar();
 
     } catch (e) {
         showMessage(e.message, 'error', 'mainAlert');
@@ -1227,7 +1395,6 @@ async function viewNetworkFolder(folderId, subfolder) {
         if (!res.ok) {
             const error = (await safeJson(res)).msg || 'Failed to load folder';
             if (error.includes('removed from shares')) {
-                // Folder was deleted, reload network files list
                 showMessage(error, 'error', 'mainAlert');
                 loadNetworkFiles();
                 return;
@@ -1237,8 +1404,7 @@ async function viewNetworkFolder(folderId, subfolder) {
 
         const data = await safeJson(res);
 
-        // Build breadcrumb for network folder navigation
-        let breadcrumb = `<span class="breadcrumb-item" onclick="loadNetworkFiles(); event.stopPropagation();">Network</span>`;
+        let breadcrumb = `<span class="breadcrumb-item" onclick="loadNetworkFiles(); event.stopPropagation();">Shared with me</span>`;
         breadcrumb += ` / <span class="breadcrumb-item" onclick="viewNetworkFolder('${escapeHtml(folderId)}', ''); event.stopPropagation();">${escapeHtml(data.folder.folder_name)}</span>`;
         
         if (currentNetworkSubfolder) {
@@ -1247,25 +1413,23 @@ async function viewNetworkFolder(folderId, subfolder) {
             parts.forEach((part, idx) => {
                 pathBuild += (pathBuild ? '/' : '') + part;
                 const navPath = pathBuild;
+                breadcrumb += ' / ';
                 if (idx === parts.length - 1) {
-                    breadcrumb += ` / <span class="breadcrumb-item active">${escapeHtml(part)}</span>`;
+                    breadcrumb += `<span class="breadcrumb-item active">${escapeHtml(part)}</span>`;
                 } else {
-                    breadcrumb += ` / <span class="breadcrumb-item" onclick="viewNetworkFolder('${escapeHtml(folderId)}', '${escapeHtml(navPath)}'); event.stopPropagation();">${escapeHtml(part)}</span>`;
+                    breadcrumb += `<span class="breadcrumb-item" onclick="viewNetworkFolder('${escapeHtml(folderId)}', '${escapeHtml(navPath)}'); event.stopPropagation();">${escapeHtml(part)}</span>`;
                 }
             });
         }
 
-        // Build file list HTML
         let html = '';
         
-        // Add back button
         html += `
-            <div class="card">
-                <button class="btn btn-secondary" onclick="loadNetworkFiles()">← Back to Network</button>
+            <div style="margin-bottom: 16px;">
+                <button class="btn btn-text" onclick="loadNetworkFiles()">← Back</button>
             </div>
         `;
 
-        // Add breadcrumb
         html += `<div class="breadcrumb-container"><div class="breadcrumb">${breadcrumb}</div></div>`;
 
         if (data.folders && data.folders.length > 0) {
@@ -1276,7 +1440,10 @@ async function viewNetworkFolder(folderId, subfolder) {
                     <div class="list-item">
                         <div class="item-info">
                             <div class="item-name folder-item" onclick="viewNetworkFolder('${escapeHtml(folderId)}', '${escapeHtml(fullPath)}')">
-                                📁 ${escapeHtml(folder.name)}
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                                </svg>
+                                ${escapeHtml(folder.name)}
                             </div>
                             <div class="item-meta">${formatDate(folder.modified)}</div>
                         </div>
@@ -1296,8 +1463,8 @@ async function viewNetworkFolder(folderId, subfolder) {
                             <div class="item-meta">${formatSize(file.file_size)} • ${formatDate(file.modified)}</div>
                         </div>
                         <div class="item-actions">
-                            ${canPreview ? `<button class="btn btn-secondary btn-small" onclick="previewFile('${escapeHtml(file.filepath)}')">Preview</button>` : ''}
-                            <button class="btn btn-primary btn-small" onclick="downloadFile('${escapeHtml(file.filepath)}')">Download</button>
+                            ${canPreview ? `<button class="btn btn-text" onclick="previewFile('${escapeHtml(file.filepath)}')">Preview</button>` : ''}
+                            <button class="btn btn-text" onclick="downloadFile('${escapeHtml(file.filepath)}')">Download</button>
                         </div>
                     </div>
                 `;
@@ -1407,14 +1574,14 @@ async function loadUsers() {
                 <div class="list-item">
                     <div class="item-info">
                         <div class="item-name">
-                            👤 ${escapeHtml(user.username)}
+                            ${user.username}
                             <span class="badge badge-${user.role}">${user.role}</span>
                             <span class="badge badge-${user.status}">${user.status}</span>
                         </div>
                         <div class="item-meta">Created: ${formatDate(new Date(user.created_at).getTime() / 1000)} • Storage: ${formatSize(user.storage_used)}</div>
                     </div>
                     <div class="item-actions">
-                        ${user.username !== 'admin' ? `<button class="btn btn-danger btn-small" onclick="removeUser('${escapeHtml(user.username)}')">Delete</button>` : ''}
+                        ${user.username !== 'admin' ? `<button class="btn btn-text btn-danger-text" onclick="removeUser('${escapeHtml(user.username)}')">Delete</button>` : ''}
                     </div>
                 </div>
             `).join('');
@@ -1442,12 +1609,12 @@ async function loadPendingUsers() {
             pendingListEl.innerHTML = data.users.map(user => `
                 <div class="list-item">
                     <div class="item-info">
-                        <div class="item-name">👤 ${escapeHtml(user.username)}</div>
+                        <div class="item-name">${escapeHtml(user.username)}</div>
                         <div class="item-meta">Requested: ${formatDate(new Date(user.created_at).getTime() / 1000)}</div>
                     </div>
                     <div class="item-actions">
-                        <button class="btn btn-success btn-small" onclick="approveUser('${escapeHtml(user.username)}')">Approve</button>
-                        <button class="btn btn-danger btn-small" onclick="rejectUser('${escapeHtml(user.username)}')">Reject</button>
+                        <button class="btn btn-text" style="color: var(--success);" onclick="approveUser('${escapeHtml(user.username)}')">Approve</button>
+                        <button class="btn btn-text btn-danger-text" onclick="rejectUser('${escapeHtml(user.username)}')">Reject</button>
                     </div>
                 </div>
             `).join('');
