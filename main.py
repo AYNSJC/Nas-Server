@@ -1419,6 +1419,68 @@ def bulk_delete_files():
     return jsonify({"msg": msg, "deleted": deleted, "errors": errors}), 200
 
 
+@app.route("/api/move", methods=["POST"])
+@jwt_required()
+def move_item():
+    """Move a single file or folder to a new destination folder."""
+    username = get_jwt_identity()
+    data = request.get_json()
+    src = (data.get('src') or '').strip()
+    dst_folder = (data.get('dst_folder') or '').strip()
+
+    if not src:
+        return jsonify({"msg": "Source path required"}), 400
+
+    src = validate_path(username, src)
+    dst_folder = validate_path(username, dst_folder) if dst_folder else ''
+
+    user_dir = STORAGE_DIR / username
+    src_path = user_dir / src
+    dst_dir  = user_dir / dst_folder if dst_folder else user_dir
+
+    # Safety checks
+    try:
+        src_path.resolve().relative_to(user_dir.resolve())
+        dst_dir.resolve().relative_to(user_dir.resolve())
+    except ValueError:
+        return jsonify({"msg": "Access denied"}), 403
+
+    if not src_path.exists():
+        return jsonify({"msg": "Source not found"}), 404
+    if not dst_dir.exists():
+        return jsonify({"msg": "Destination folder not found"}), 404
+
+    # Prevent moving folder into itself
+    if src_path.is_dir():
+        try:
+            dst_dir.resolve().relative_to(src_path.resolve())
+            return jsonify({"msg": "Cannot move a folder into itself"}), 400
+        except ValueError:
+            pass
+
+    dst_path = dst_dir / src_path.name
+    if dst_path.resolve() == src_path.resolve():
+        return jsonify({"msg": "Already in that location"}), 400
+
+    # Avoid collision
+    if dst_path.exists():
+        base = src_path.stem if src_path.is_file() else src_path.name
+        ext  = src_path.suffix if src_path.is_file() else ''
+        counter = 1
+        while dst_path.exists():
+            dst_path = dst_dir / f"{base}_{counter}{ext}"
+            counter += 1
+
+    try:
+        shutil.move(str(src_path), str(dst_path))
+        user_manager.update_storage_used(username)
+        logger.info(f"Move: {username}/{src} -> {dst_folder or '(root)'}")
+        return jsonify({"msg": "Moved", "new_path": str(dst_path.relative_to(user_dir))}), 200
+    except Exception as e:
+        logger.error(f"Move error: {e}")
+        return jsonify({"msg": f"Move failed: {str(e)}"}), 500
+
+
 @app.route("/api/bulk/move", methods=["POST"])
 @jwt_required()
 def bulk_move_files():

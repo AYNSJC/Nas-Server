@@ -657,7 +657,15 @@ async function loadFiles(path = '') {
             html += data.folders.map(folder => {
                 const folderPath = currentPath ? currentPath + '/' + folder.name : folder.name;
                 return `
-                <div class="list-item">
+                <div class="list-item" 
+                     draggable="true"
+                     data-path="${escapeHtml(folderPath)}"
+                     data-type="folder"
+                     data-drop-target="true"
+                     ondragstart="onDragStart(event)"
+                     ondragover="onDragOver(event)"
+                     ondragleave="onDragLeave(event)"
+                     ondrop="onDrop(event)">
                     <div class="item-info">
                         <div class="item-name folder-item" onclick="loadFiles('${escapeHtml(folderPath)}')">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -669,12 +677,28 @@ async function loadFiles(path = '') {
                         <div class="item-meta">${formatDate(folder.modified)}</div>
                     </div>
                     <div class="item-actions">
-                        ${!folder.is_shared ? `<button class="btn btn-text" onclick="requestFolderShare('${escapeHtml(folderPath)}'); event.stopPropagation();">Share</button>` : ''}
+                        <div class="kebab-wrap">
+                            <button class="btn-kebab" onclick="toggleMenu(event, 'menu-f-${escapeHtml(folderPath)}')" title="Options">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+                            </button>
+                            <div class="kebab-menu" id="menu-f-${escapeHtml(folderPath)}">
+                                ${!folder.is_shared ? `<button class="kebab-item" onclick="requestFolderShare('${escapeHtml(folderPath)}'); closeAllMenus()">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+                                    Share</button>` : ''}
+                                <button class="kebab-item" onclick="promptMoveItem('${escapeHtml(folderPath)}', 'folder'); closeAllMenus()">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="5 9 2 12 5 15"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
+                                    Move</button>
+                            </div>
+                        </div>
                         <button class="btn btn-text btn-danger-text" onclick="deleteFolder('${escapeHtml(folderPath)}'); event.stopPropagation();">Delete</button>
                     </div>
                 </div>`;
             }).join('');
         }
+
+        // Drop zone for root (empty area)
+        html += `<div class="list-drop-root" data-path="" data-type="folder" data-drop-target="true"
+                      ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)"></div>`;
 
         if (data.files && data.files.length > 0) {
             html += '<div class="section-header">Files</div>';
@@ -685,7 +709,11 @@ async function loadFiles(path = '') {
                 allFiles.push({ path: filePath, type: file.type, name: file.name });
 
                 return `
-                    <div class="list-item">
+                    <div class="list-item"
+                         draggable="true"
+                         data-path="${escapeHtml(filePath)}"
+                         data-type="file"
+                         ondragstart="onDragStart(event)">
                         <div class="item-info" style="display: flex; align-items: center; gap: 12px;">
                             <input type="checkbox" class="file-checkbox" data-filepath="${escapeHtml(filePath)}"
                                    onclick="toggleFileSelection('${escapeHtml(filePath)}'); event.stopPropagation();">
@@ -698,12 +726,28 @@ async function loadFiles(path = '') {
                             </div>
                         </div>
                         <div class="item-actions">
-                            ${canEdit ? `<button class="btn btn-text btn-edit" onclick="openEditor('${escapeHtml(filePath)}', '${escapeHtml(file.name)}')">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
-                                Edit</button>` : ''}
-                            ${canPreview ? `<button class="btn btn-text" onclick="previewFile('${escapeHtml(filePath)}', ${index})">Preview</button>` : ''}
-                            <button class="btn btn-text" onclick="downloadFile('${escapeHtml(filePath)}')">Download</button>
-                            ${!file.is_shared ? `<button class="btn btn-text" onclick="requestShare('${escapeHtml(filePath)}')">Share</button>` : ''}
+                            <div class="kebab-wrap">
+                                <button class="btn-kebab" onclick="toggleMenu(event, 'menu-${escapeHtml(filePath)}')" title="Options">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+                                </button>
+                                <div class="kebab-menu" id="menu-${escapeHtml(filePath)}">
+                                    ${canEdit ? `<button class="kebab-item kebab-item-edit" onclick="openEditor('${escapeHtml(filePath)}', '${escapeHtml(file.name)}'); closeAllMenus()">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                        Edit</button>` : ''}
+                                    ${canPreview ? `<button class="kebab-item" onclick="previewFile('${escapeHtml(filePath)}', ${index}); closeAllMenus()">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                        Preview</button>` : ''}
+                                    <button class="kebab-item" onclick="downloadFile('${escapeHtml(filePath)}'); closeAllMenus()">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                        Download</button>
+                                    ${!file.is_shared ? `<button class="kebab-item" onclick="requestShare('${escapeHtml(filePath)}'); closeAllMenus()">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+                                        Share</button>` : ''}
+                                    <button class="kebab-item" onclick="promptMoveItem('${escapeHtml(filePath)}', 'file'); closeAllMenus()">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="5 9 2 12 5 15"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
+                                        Move</button>
+                                </div>
+                            </div>
                             <button class="btn btn-text btn-danger-text" onclick="deleteFile('${escapeHtml(filePath)}')">Delete</button>
                         </div>
                     </div>`;
@@ -1725,11 +1769,31 @@ async function openEditor(filepath, filename) {
                     </button>
                 </div>
                 <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
+                    <div class="editor-zoom-controls">
+                        <button class="editor-tool" onclick="editorZoomOut()" title="Decrease font size">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                        </button>
+                        <span class="editor-zoom-label" id="editorFontSizeDisplay">${editorFontSize}px</span>
+                        <button class="editor-tool" onclick="editorZoomIn()" title="Increase font size">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                        </button>
+                        <button class="editor-tool" onclick="editorZoomReset()" title="Reset font size" style="font-size:10px;width:auto;padding:0 6px;">1:1</button>
+                    </div>
                     <span class="editor-word-count" id="editorWordCount">0 words</span>
                 </div>
             </div>` : `
             <div class="editor-toolbar" id="editorToolbar">
                 <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
+                    <div class="editor-zoom-controls">
+                        <button class="editor-tool" onclick="editorZoomOut()" title="Decrease font size">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                        </button>
+                        <span class="editor-zoom-label" id="editorFontSizeDisplay">${editorFontSize}px</span>
+                        <button class="editor-tool" onclick="editorZoomIn()" title="Increase font size">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                        </button>
+                        <button class="editor-tool" onclick="editorZoomReset()" title="Reset font size" style="font-size:10px;width:auto;padding:0 6px;">1:1</button>
+                    </div>
                     <span class="editor-word-count" id="editorWordCount">0 words</span>
                 </div>
             </div>`}
@@ -1784,6 +1848,9 @@ async function openEditor(filepath, filename) {
     // Focus
     textarea.focus();
     textarea.setSelectionRange(0, 0);
+
+    // Apply saved font size
+    applyEditorFontSize();
 }
 
 function closeEditor() {
@@ -1827,6 +1894,24 @@ function onEditorKeydown(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
         saveEditor();
+        return;
+    }
+    // Ctrl+= or Ctrl++ → zoom in
+    if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        editorZoomIn();
+        return;
+    }
+    // Ctrl+- → zoom out
+    if ((e.ctrlKey || e.metaKey) && e.key === '-') {
+        e.preventDefault();
+        editorZoomOut();
+        return;
+    }
+    // Ctrl+0 → reset zoom
+    if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+        e.preventDefault();
+        editorZoomReset();
         return;
     }
     // Tab → insert 2 spaces
@@ -2064,4 +2149,227 @@ function mdInsertTable() {
     ta.setRangeText(table, pos, pos, 'end');
     ta.focus();
     onEditorInput();
+}
+
+/* =====================================================
+   EDITOR FONT ZOOM
+   ===================================================== */
+
+let editorFontSize = parseInt(localStorage.getItem('editorFontSize') || '14');
+
+function applyEditorFontSize() {
+    const ta = document.getElementById('editorTextarea');
+    if (ta) ta.style.fontSize = editorFontSize + 'px';
+    const display = document.getElementById('editorFontSizeDisplay');
+    if (display) display.textContent = editorFontSize + 'px';
+    localStorage.setItem('editorFontSize', editorFontSize);
+}
+
+function editorZoomIn() {
+    if (editorFontSize < 32) { editorFontSize += 2; applyEditorFontSize(); }
+}
+
+function editorZoomOut() {
+    if (editorFontSize > 10) { editorFontSize -= 2; applyEditorFontSize(); }
+}
+
+function editorZoomReset() {
+    editorFontSize = 14; applyEditorFontSize();
+}
+
+/* =====================================================
+   HAMBURGER / KEBAB MENU
+   ===================================================== */
+
+function toggleMenu(event, menuId) {
+    event.stopPropagation();
+    const menu = document.getElementById(menuId);
+    if (!menu) return;
+
+    const isOpen = menu.classList.contains('open');
+    closeAllMenus();
+
+    if (!isOpen) {
+        menu.classList.add('open');
+
+        // Flip to left if too close to right edge
+        const rect = menu.getBoundingClientRect();
+        if (rect.right > window.innerWidth - 16) {
+            menu.style.right = '0';
+            menu.style.left = 'auto';
+        } else {
+            menu.style.left = '0';
+            menu.style.right = 'auto';
+        }
+
+        // Flip up if too close to bottom
+        setTimeout(() => {
+            const r = menu.getBoundingClientRect();
+            if (r.bottom > window.innerHeight - 16) {
+                menu.style.bottom = '100%';
+                menu.style.top = 'auto';
+            }
+        }, 0);
+    }
+}
+
+function closeAllMenus() {
+    document.querySelectorAll('.kebab-menu.open').forEach(m => {
+        m.classList.remove('open');
+        m.style.bottom = '';
+        m.style.top = '';
+    });
+}
+
+// Close menus on any click outside
+document.addEventListener('click', closeAllMenus);
+
+/* =====================================================
+   DRAG & DROP — MOVE FILES/FOLDERS
+   ===================================================== */
+
+let dragItem = null;  // { path, type }
+
+function onDragStart(event) {
+    const el = event.currentTarget;
+    dragItem = {
+        path: el.dataset.path,
+        type: el.dataset.type
+    };
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', dragItem.path);
+    el.classList.add('dragging');
+}
+
+document.addEventListener('dragend', () => {
+    document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+    document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    dragItem = null;
+});
+
+function onDragOver(event) {
+    if (!dragItem) return;
+    const el = event.currentTarget;
+    const targetPath = el.dataset.path;
+    const targetType = el.dataset.type;
+
+    // Only allow drop on folders or the root drop zone
+    if (targetType !== 'folder') return;
+    // Don't allow dropping onto itself
+    if (targetPath === dragItem.path) return;
+    // Don't allow dropping a folder into its own subfolder
+    if (dragItem.type === 'folder' && targetPath.startsWith(dragItem.path + '/')) return;
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    el.classList.add('drag-over');
+}
+
+function onDragLeave(event) {
+    event.currentTarget.classList.remove('drag-over');
+}
+
+async function onDrop(event) {
+    event.preventDefault();
+    const el = event.currentTarget;
+    el.classList.remove('drag-over');
+
+    if (!dragItem) return;
+
+    const dstFolder = el.dataset.path || '';  // empty = root
+    const src = dragItem.path;
+
+    // No-op: dropping into current parent
+    const srcParent = src.includes('/') ? src.substring(0, src.lastIndexOf('/')) : '';
+    if (dstFolder === srcParent) return;
+    // Can't drop folder into its own descendant
+    if (dragItem.type === 'folder' && (dstFolder === src || dstFolder.startsWith(src + '/'))) return;
+
+    try {
+        const res = await fetch('/api/move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+            body: JSON.stringify({ src, dst_folder: dstFolder })
+        });
+        const data = await safeJson(res);
+        if (!res.ok) throw new Error(data.msg || 'Move failed');
+        showMessage(data.msg, 'success', 'mainAlert');
+        loadFiles(currentPath);
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+/* =====================================================
+   MOVE VIA DIALOG (for the menu "Move" option)
+   ===================================================== */
+
+async function promptMoveItem(srcPath, type) {
+    // Load folder list to show options
+    let folderList = ['(root)'];
+    try {
+        const res = await fetch('/api/files?folder=', {
+            headers: { Authorization: 'Bearer ' + token }
+        });
+        const d = await safeJson(res);
+        if (d.folders) {
+            // Build flat list recursively (shallow: just top-level for now)
+            folderList = folderList.concat(d.folders.map(f => f.name));
+        }
+    } catch (_) {}
+
+    const existing = document.getElementById('moveDialog');
+    if (existing) existing.remove();
+
+    const name = srcPath.includes('/') ? srcPath.substring(srcPath.lastIndexOf('/') + 1) : srcPath;
+    const dialog = document.createElement('div');
+    dialog.id = 'moveDialog';
+    dialog.className = 'move-dialog-overlay';
+    dialog.innerHTML = `
+        <div class="move-dialog">
+            <div class="move-dialog-header">
+                <span>Move "${escapeHtml(name)}"</span>
+                <button class="move-dialog-close" onclick="document.getElementById('moveDialog').remove()">✕</button>
+            </div>
+            <div class="move-dialog-body">
+                <label class="move-dialog-label">Destination folder path</label>
+                <input class="move-dialog-input" id="moveDestInput" type="text"
+                       placeholder="Leave blank for root, or type folder path"
+                       value="${escapeHtml(currentPath)}">
+                <div class="move-dialog-hint">Examples: <code>photos</code> · <code>work/docs</code> · leave blank for root</div>
+                <div class="move-dialog-quick">Quick jump:</div>
+                <div class="move-dialog-folders" id="moveFolderList">
+                    <button class="move-folder-btn" onclick="document.getElementById('moveDestInput').value=''">📁 Root</button>
+                    ${folderList.filter(f => f !== '(root)').map(f => `
+                        <button class="move-folder-btn" onclick="document.getElementById('moveDestInput').value='${escapeHtml(f)}'">📁 ${escapeHtml(f)}</button>
+                    `).join('')}
+                </div>
+            </div>
+            <div class="move-dialog-footer">
+                <button class="btn btn-text" onclick="document.getElementById('moveDialog').remove()">Cancel</button>
+                <button class="btn btn-primary" onclick="executeMoveDialog('${escapeHtml(srcPath)}')">Move</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(dialog);
+    document.getElementById('moveDestInput').focus();
+}
+
+async function executeMoveDialog(srcPath) {
+    const dest = document.getElementById('moveDestInput')?.value.trim() || '';
+    document.getElementById('moveDialog')?.remove();
+
+    try {
+        const res = await fetch('/api/move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+            body: JSON.stringify({ src: srcPath, dst_folder: dest })
+        });
+        const data = await safeJson(res);
+        if (!res.ok) throw new Error(data.msg || 'Move failed');
+        showMessage(data.msg, 'success', 'mainAlert');
+        loadFiles(currentPath);
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
 }

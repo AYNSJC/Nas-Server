@@ -663,3 +663,193 @@ input::placeholder { color: var(--text-tertiary); }
     .editor-btn { padding: 6px 10px; min-width: 36px; }
     .editor-status { display: none; }
 }
+
+/* =========================================================
+   KEBAB / HAMBURGER MENU
+   ========================================================= */
+
+.kebab-wrap {
+    position: relative;
+}
+
+.btn-kebab {
+    display: flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 6px;
+    border: none; background: transparent;
+    color: var(--text-tertiary); cursor: pointer;
+    transition: var(--transition);
+    flex-shrink: 0;
+}
+.btn-kebab:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.kebab-menu {
+    position: absolute;
+    top: 100%; left: 0;
+    margin-top: 4px;
+    min-width: 160px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.08);
+    z-index: 500;
+    overflow: hidden;
+    opacity: 0;
+    transform: scale(0.94) translateY(-6px);
+    pointer-events: none;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+    transform-origin: top left;
+}
+.kebab-menu.open {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    pointer-events: all;
+}
+
+.kebab-item {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; padding: 9px 14px;
+    border: none; background: transparent;
+    font-size: 13px; font-weight: 500; font-family: inherit;
+    color: var(--text-primary); cursor: pointer;
+    text-align: left; transition: background 0.1s;
+}
+.kebab-item:hover {
+    background: var(--bg-secondary);
+}
+.kebab-item:active { background: var(--bg-tertiary); }
+.kebab-item svg { flex-shrink: 0; color: var(--text-secondary); }
+
+.kebab-item-edit { color: var(--success) !important; }
+.kebab-item-edit svg { color: var(--success) !important; }
+
+/* =========================================================
+   DRAG & DROP
+   ========================================================= */
+
+.list-item[draggable="true"] { cursor: grab; }
+.list-item[draggable="true"]:active { cursor: grabbing; }
+
+.list-item.dragging {
+    opacity: 0.45;
+    transform: scale(0.98);
+}
+
+.list-item.drag-over,
+.list-drop-root.drag-over {
+    background: var(--primary-light) !important;
+    outline: 2px dashed var(--primary);
+    outline-offset: -2px;
+    border-radius: 10px;
+}
+
+/* invisible root drop zone */
+.list-drop-root {
+    height: 24px;
+    margin: 0;
+    border-radius: 8px;
+    transition: background 0.15s, outline 0.15s;
+}
+
+/* =========================================================
+   MOVE DIALOG
+   ========================================================= */
+
+.move-dialog-overlay {
+    position: fixed; inset: 0; z-index: 1500;
+    background: rgba(0,0,0,0.55);
+    display: flex; align-items: center; justify-content: center;
+    backdrop-filter: blur(3px);
+    padding: 20px;
+}
+
+.move-dialog {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    width: 100%; max-width: 420px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    overflow: hidden;
+    animation: editorFadeIn 0.15s ease;
+}
+
+.move-dialog-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    font-weight: 600; font-size: 15px;
+}
+
+.move-dialog-close {
+    background: none; border: none; cursor: pointer;
+    color: var(--text-secondary); font-size: 16px; padding: 2px 6px;
+    border-radius: 4px; transition: var(--transition);
+}
+.move-dialog-close:hover { background: var(--danger-light); color: var(--danger); }
+
+.move-dialog-body { padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+
+.move-dialog-label {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--text-tertiary);
+}
+
+.move-dialog-input {
+    width: 100%; padding: 10px 14px;
+    border: 1.5px solid var(--border); border-radius: 8px;
+    font-size: 14px; font-family: 'JetBrains Mono', monospace;
+    background: var(--bg-secondary); color: var(--text-primary);
+    outline: none; transition: border-color 0.15s;
+}
+.move-dialog-input:focus { border-color: var(--primary); }
+
+.move-dialog-hint {
+    font-size: 12px; color: var(--text-tertiary);
+}
+.move-dialog-hint code {
+    background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.move-dialog-quick {
+    font-size: 12px; font-weight: 600; color: var(--text-secondary);
+}
+
+.move-dialog-folders {
+    display: flex; flex-wrap: wrap; gap: 6px;
+}
+
+.move-folder-btn {
+    background: var(--bg-secondary); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 10px;
+    font-size: 12px; cursor: pointer; color: var(--text-primary);
+    font-family: inherit; transition: var(--transition);
+}
+.move-folder-btn:hover { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
+
+.move-dialog-footer {
+    display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-secondary);
+}
+
+/* =========================================================
+   EDITOR FONT ZOOM CONTROLS
+   ========================================================= */
+
+.editor-zoom-controls {
+    display: flex; align-items: center; gap: 2px;
+    background: var(--bg-secondary); border-radius: 6px;
+    padding: 2px;
+}
+
+.editor-zoom-label {
+    font-size: 11px; font-family: 'JetBrains Mono', monospace;
+    color: var(--text-secondary); padding: 0 4px;
+    min-width: 34px; text-align: center;
+    user-select: none;
+}
