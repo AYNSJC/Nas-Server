@@ -751,6 +751,28 @@ input::placeholder { color: var(--text-tertiary); }
     margin: 0;
     border-radius: 8px;
     transition: background 0.15s, outline 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.drop-root-label {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    opacity: 0;
+    transition: opacity 0.15s;
+    pointer-events: none;
+    user-select: none;
+}
+
+/* Show label and expand zone when something is being dragged */
+body.is-dragging .list-drop-root {
+    height: 40px;
+    border: 1.5px dashed var(--border);
+}
+
+body.is-dragging .drop-root-label {
+    opacity: 0.7;
 }
 
 /* =========================================================
@@ -875,6 +897,9 @@ input::placeholder { color: var(--text-tertiary); }
     object-fit: contain;
     background: #000;
     outline: none;
+    /* No animation, no fade — instant display */
+    animation: none !important;
+    transition: none !important;
 }
 
 .video-controls-bar {

@@ -651,6 +651,7 @@ async function loadFiles(path = '') {
 
         const fileListEl = document.getElementById('fileList');
         let html = '';
+        const newFiles = []; // collect locally, assign atomically at end
 
         if (data.folders && data.folders.length > 0) {
             html += '<div class="section-header">Folders</div>';
@@ -696,9 +697,14 @@ async function loadFiles(path = '') {
             }).join('');
         }
 
-        // Drop zone for root (empty area)
-        html += `<div class="list-drop-root" data-path="" data-type="folder" data-drop-target="true"
-                      ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)"></div>`;
+        // Drop zone: when inside a folder, the root drop zone = the PARENT folder (enables drag-out)
+        const parentPath = currentPath.includes('/')
+            ? currentPath.substring(0, currentPath.lastIndexOf('/'))
+            : '';
+        html += `<div class="list-drop-root" data-path="${escapeHtml(parentPath)}" data-type="folder" data-drop-target="true"
+                      ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+                    ${currentPath ? `<span class="drop-root-label">↑ Drop here to move to ${parentPath ? escapeHtml(parentPath.split('/').pop()) : 'root'}</span>` : ''}
+                 </div>`;
 
         if (data.files && data.files.length > 0) {
             html += '<div class="section-header">Files</div>';
@@ -706,7 +712,7 @@ async function loadFiles(path = '') {
                 const filePath = currentPath ? currentPath + '/' + file.name : file.name;
                 const canPreview = file.type !== 'other';
                 const canEdit = isEditableFile(file.name);
-                allFiles.push({ path: filePath, type: file.type, name: file.name });
+                newFiles.push({ path: filePath, type: file.type, name: file.name });
 
                 return `
                     <div class="list-item"
@@ -758,6 +764,7 @@ async function loadFiles(path = '') {
             html = '<div class="empty-state"><div class="empty-state-icon">📁</div><div class="empty-state-text">This folder is empty</div></div>';
         }
 
+        allFiles = newFiles; // atomic assignment — no race condition duplicates
         fileListEl.innerHTML = html;
         updateBulkActionsBar();
     } catch (e) {
@@ -1011,6 +1018,11 @@ function openPreviewModal(previewUrl, filename, index, total, mode = 'iframe') {
     const modal = document.createElement('div');
     modal.className = 'preview-modal';
     modal.id = 'previewModal';
+    // For video: use a plain black background with no overlay fade effect
+    if (mode === 'video') {
+        modal.style.background = '#000';
+        modal.style.padding = '0';
+    }
     modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
 
     const content = document.createElement('div');
@@ -2348,11 +2360,13 @@ function onDragStart(event) {
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', dragItem.path);
     el.classList.add('dragging');
+    document.body.classList.add('is-dragging');
 }
 
 document.addEventListener('dragend', () => {
     document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
     document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    document.body.classList.remove('is-dragging');
     dragItem = null;
 });
 
