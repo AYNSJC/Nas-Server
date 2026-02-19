@@ -41,27 +41,14 @@ LOG_DIR.mkdir(exist_ok=True)
 STATIC_DIR.mkdir(exist_ok=True)
 
 JWT_SECRET = os.getenv("JWT_SECRET_KEY", secrets.token_urlsafe(64))
-# No file size limit — Flask/Werkzeug will accept files of any size.
 
-# Only block genuinely dangerous executables that could harm the server or clients.
-# Everything else (3D, CAD, game engines, code, media, etc.) is allowed.
 DANGEROUS_EXTENSIONS = {
-    # Windows executables & scripts
     'exe', 'bat', 'cmd', 'com', 'pif', 'scr', 'vbs', 'msi', 'hta',
-    # Linux/Mac executables
-    'sh', 'bash', 'zsh', 'run', 'bin', 'deb', 'rpm', 'pkg', 'dmg',
-    # Code that executes server-side
+    'sh', 'bash', 'zsh',
     'py', 'rb', 'pl', 'php', 'cgi',
-    # System libraries
-    'dll', 'so', 'dylib',
-    # Other vectors
-    'ps1', 'psm1', 'psd1', 'jar', 'apk', 'ipa',
+    'ps1', 'psm1', 'psd1',
+    'apk', 'ipa',
 }
-
-# No allowlist — any extension not in DANGEROUS_EXTENSIONS is accepted.
-# This allows: .blend, .fbx, .obj, .dxf, .dwg, .unity, .cs, .uasset,
-#              .max, .ma, .mb, .c4d, .ztl, .stp, .step, .iges, .stl,
-#              and any other creative / engineering / game file format.
 
 PREVIEWABLE_TYPES = {
     'image': {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'tiff', 'tif'},
@@ -74,11 +61,13 @@ PREVIEWABLE_TYPES = {
 
 
 def allowed_file(filename):
-    """Block only dangerous executables. Allow everything else including no-extension files."""
-    if '.' not in filename:
-        # Allow files without extensions (e.g. Makefile, Dockerfile)
+    basename = filename.replace('\\', '/').rstrip('/')
+    if '/' in basename:
+        basename = basename.rsplit('/', 1)[1]
+    name_part = basename.lstrip('.')
+    if '.' not in name_part:
         return True
-    ext = filename.rsplit('.', 1)[1].lower()
+    ext = name_part.rsplit('.', 1)[1].lower()
     return ext not in DANGEROUS_EXTENSIONS
 
 
@@ -99,26 +88,33 @@ def validate_username(username):
 
 
 def validate_path(username, path):
-    """Validate and sanitize path to prevent directory traversal"""
+    """Validate and sanitize a path, preserving hidden folder dots."""
     if not path:
         return ""
-
-    # Remove leading/trailing slashes and dots
-    path = path.strip().strip('/').strip('.')
-
-    # Split and sanitize each component
-    components = [secure_filename(p) for p in path.split('/') if p and p != '..']
-
+    path = path.strip().strip('/')
+    # Split into components and sanitize each, preserving leading dots for hidden dirs
+    components = []
+    for p in path.split('/'):
+        if not p or p == '..':
+            continue
+        # Check if it's a hidden entry (starts with dot)
+        leading_dot = p.startswith('.')
+        inner = p.lstrip('.')
+        safe = secure_filename(inner) if inner else ''
+        if not safe and not leading_dot:
+            continue
+        if leading_dot and safe:
+            components.append('.' + safe)
+        elif leading_dot and not safe:
+            # e.g. ".hidden" where inner part is empty after strip — keep as-is if safe chars
+            safe_raw = re.sub(r'[^\w\-]', '_', p).strip('_') or 'hidden'
+            components.append(safe_raw)
+        else:
+            components.append(safe)
     return '/'.join(components)
 
 
 def sanitize_relative_path(rel_path):
-    """
-    Sanitize a relative file path (e.g. from webkitRelativePath) while
-    preserving the folder structure. Each component is cleaned individually
-    so slashes are never stripped.
-    e.g.  "MyProject/src/utils/helper.py"  ->  "MyProject/src/utils/helper.py"
-    """
     if not rel_path:
         return ""
     rel_path = rel_path.replace("\\", "/").strip("/")
@@ -126,9 +122,16 @@ def sanitize_relative_path(rel_path):
     for part in rel_path.split("/"):
         if not part or part in (".", ".."):
             continue
-        safe = secure_filename(part)
-        if safe:
-            clean_parts.append(safe)
+        leading_dot = part.startswith('.')
+        inner = part.lstrip('.')
+        safe = secure_filename(inner) if inner else ''
+        if leading_dot and safe:
+            safe = '.' + safe
+        elif leading_dot and not safe:
+            safe = re.sub(r'[^\w\-.]', '_', part).strip('._') or 'file'
+        elif not safe:
+            safe = re.sub(r'[^\w\-.]', '_', part).strip('._') or 'file'
+        clean_parts.append(safe)
     return "/".join(clean_parts)
 
 
@@ -221,7 +224,6 @@ class SharedFilesManager:
     def reject_folder_share(self, folder_id):
         if "pending_folders" not in self.shared_files:
             return False
-
         for i, entry in enumerate(self.shared_files["pending_folders"]):
             if entry["id"] == folder_id:
                 self.shared_files["pending_folders"].pop(i)
@@ -240,7 +242,6 @@ class SharedFilesManager:
     def remove_folder_share(self, folder_id):
         if "folders" not in self.shared_files:
             return False
-
         for i, entry in enumerate(self.shared_files["folders"]):
             if entry["id"] == folder_id:
                 self.shared_files["folders"].pop(i)
@@ -279,22 +280,27 @@ class SharedFilesManager:
         return False
 
     def is_in_shared_folder(self, username, filepath):
-        """Check if a file is within a shared folder"""
         if "folders" not in self.shared_files:
             return False
-
         for folder in self.shared_files["folders"]:
             if folder["username"] == username:
-                # Check if filepath starts with the folder path
                 if filepath.startswith(folder["folder_path"] + "/") or filepath == folder["folder_path"]:
                     return True
         return False
 
+    def get_shared_folder_for_path(self, username, filepath):
+        """Return the shared folder entry that contains the given filepath, or None."""
+        if "folders" not in self.shared_files:
+            return None
+        for folder in self.shared_files["folders"]:
+            if folder["username"] == username:
+                if filepath.startswith(folder["folder_path"] + "/") or filepath == folder["folder_path"]:
+                    return folder
+        return None
+
     def cleanup_missing_items(self):
-        """Remove shares for files and folders that no longer exist"""
         changed = False
-        
-        # Clean up approved files
+
         approved = self.shared_files.get("approved", [])
         cleaned_approved = []
         for entry in approved:
@@ -305,11 +311,10 @@ class SharedFilesManager:
             else:
                 changed = True
                 logger.info(f"Removed missing shared file: {entry['username']}/{entry['filepath']}")
-        
+
         if len(cleaned_approved) != len(approved):
             self.shared_files["approved"] = cleaned_approved
-        
-        # Clean up approved folders
+
         folders = self.shared_files.get("folders", [])
         cleaned_folders = []
         for entry in folders:
@@ -320,13 +325,13 @@ class SharedFilesManager:
             else:
                 changed = True
                 logger.info(f"Removed missing shared folder: {entry['username']}/{entry['folder_path']}")
-        
+
         if len(cleaned_folders) != len(folders):
             self.shared_files["folders"] = cleaned_folders
-        
+
         if changed:
             self.save_shared_files()
-        
+
         return changed
 
 
@@ -355,7 +360,9 @@ class UserManager:
                 "role": "admin",
                 "status": "approved",
                 "created_at": datetime.now().isoformat(),
-                "storage_used": 0
+                "storage_used": 0,
+                "trusted_uploader": True,
+                "auto_share": False
             }
         }
         self.save_users()
@@ -377,7 +384,9 @@ class UserManager:
             "role": "user",
             "status": "pending",
             "created_at": datetime.now().isoformat(),
-            "storage_used": 0
+            "storage_used": 0,
+            "trusted_uploader": False,
+            "auto_share": False
         }
         self.save_users()
         return True, "Registration submitted for approval"
@@ -410,7 +419,9 @@ class UserManager:
             "role": role,
             "status": "approved",
             "created_at": datetime.now().isoformat(),
-            "storage_used": 0
+            "storage_used": 0,
+            "trusted_uploader": role == "admin",
+            "auto_share": False
         }
         self.save_users()
         (STORAGE_DIR / username).mkdir(exist_ok=True)
@@ -443,7 +454,9 @@ class UserManager:
                 "role": d["role"],
                 "status": d["status"],
                 "created_at": d["created_at"],
-                "storage_used": d["storage_used"]
+                "storage_used": d["storage_used"],
+                "trusted_uploader": d.get("trusted_uploader", False),
+                "auto_share": d.get("auto_share", False)
             }
             for u, d in self.users.items()
             if status is None or d["status"] == status
@@ -456,11 +469,26 @@ class UserManager:
             self.users[username]["storage_used"] = total
             self.save_users()
 
+    def set_trusted_uploader(self, username, value: bool):
+        if username not in self.users:
+            return False, "User not found"
+        self.users[username]["trusted_uploader"] = value
+        self.save_users()
+        return True, "Updated"
+
+    def set_auto_share(self, username, value: bool):
+        if username not in self.users:
+            return False, "User not found"
+        self.users[username]["auto_share"] = value
+        self.save_users()
+        return True, "Updated"
+
 
 app = Flask(__name__, static_folder='static')
 app.config.update(
     JWT_SECRET_KEY=JWT_SECRET,
     JWT_ACCESS_TOKEN_EXPIRES=timedelta(hours=8),
+    MAX_CONTENT_LENGTH=None,
 )
 CORS(app)
 jwt = JWTManager(app)
@@ -479,7 +507,6 @@ logger = logging.getLogger(__name__)
 
 
 # ==================== GLOBAL ERROR HANDLERS ====================
-# Ensures Flask NEVER returns an HTML error page to the frontend — always JSON.
 
 @app.errorhandler(400)
 def bad_request(e):
@@ -495,7 +522,6 @@ def forbidden(e):
 
 @app.errorhandler(404)
 def not_found(e):
-    # API routes → JSON 404; everything else → serve the SPA
     if request.path.startswith('/api/'):
         return jsonify({"msg": f"Endpoint not found: {request.path}"}), 404
     return send_file(STATIC_DIR / "index.html")
@@ -521,6 +547,11 @@ def format_size(size):
             return f"{size:.2f} {unit}"
         size /= 1024
     return f"{size:.2f} PB"
+
+
+def should_auto_approve(user):
+    """Returns True if a share request from this user should be auto-approved."""
+    return user.get("role") == "admin" or user.get("trusted_uploader", False)
 
 
 # ==================== STATIC FILES ====================
@@ -566,6 +597,7 @@ def login():
     return jsonify({
         "access_token": access_token,
         "role": user["role"],
+        "trusted_uploader": user.get("trusted_uploader", False),
         "msg": "Login successful"
     }), 200
 
@@ -587,11 +619,13 @@ def upload_files():
         return jsonify({"msg": "No files provided"}), 400
 
     files = request.files.getlist('files')
-    # 'paths' = webkitRelativePath list sent by the browser for each file
     paths = request.form.getlist('paths')
 
     uploaded = []
     errors = []
+
+    # Check if uploading into an already-shared folder
+    shared_folder_entry = shared_manager.get_shared_folder_for_path(username, folder_path) if folder_path else None
 
     for idx, file in enumerate(files):
         if file.filename == '':
@@ -602,13 +636,11 @@ def upload_files():
             continue
 
         if is_folder_upload and idx < len(paths):
-            # Preserve full directory structure by sanitizing each component individually
             rel_path = sanitize_relative_path(paths[idx])
             if not rel_path:
                 rel_path = secure_filename(file.filename)
             target_path = base_dir / rel_path
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            # Handle filename conflicts
             if target_path.exists():
                 name, ext = os.path.splitext(target_path.name)
                 counter = 1
@@ -630,7 +662,8 @@ def upload_files():
             rel = str(target_path.relative_to(user_dir))
             uploaded.append(rel)
 
-            if user.get("auto_share", False):
+            # Auto-share if: user has auto_share flag, OR uploading into a shared folder
+            if user.get("auto_share", False) or shared_folder_entry:
                 stat = target_path.stat()
                 file_id = shared_manager.request_share(
                     username, rel, target_path.name,
@@ -649,7 +682,7 @@ def upload_files():
         msg = f"Uploaded {len(uploaded)} file(s)"
         if errors:
             msg += f". {len(errors)} file(s) failed"
-        if user.get("auto_share", False):
+        if user.get("auto_share", False) or shared_folder_entry:
             msg += " and auto-shared to network"
         return jsonify({"msg": msg, "uploaded": uploaded}), 200
 
@@ -659,7 +692,6 @@ def upload_files():
 @app.route("/api/stats", methods=["GET"])
 @jwt_required()
 def get_stats():
-    """Always returns total files + storage across the user's entire storage, not just current folder."""
     username = get_jwt_identity()
     user_dir = STORAGE_DIR / username
 
@@ -772,14 +804,14 @@ def request_share():
         get_file_type(file_path.name)
     )
 
-    # Auto-approve if user is admin
-    if user["role"] == "admin":
+    # Auto-approve for admins and trusted uploaders
+    if should_auto_approve(user):
         shared_manager.approve_share(file_id)
-        logger.info(f"Share auto-approved for admin: {username}/{filepath}")
-        return jsonify({"msg": "File shared successfully (auto-approved)", "file_id": file_id}), 200
+        logger.info(f"Share auto-approved for {username}: {filepath}")
+        return jsonify({"msg": "File shared to network", "file_id": file_id, "auto_approved": True}), 200
 
     logger.info(f"Share request: {username}/{filepath}")
-    return jsonify({"msg": "Share request submitted for approval", "file_id": file_id}), 200
+    return jsonify({"msg": "Share request submitted for approval", "file_id": file_id, "auto_approved": False}), 200
 
 
 @app.route("/api/share/folder/request", methods=["POST"])
@@ -808,14 +840,14 @@ def request_folder_share():
         folder_full_path.name
     )
 
-    # Auto-approve if user is admin
-    if user["role"] == "admin":
+    # Auto-approve for admins and trusted uploaders
+    if should_auto_approve(user):
         shared_manager.approve_folder_share(folder_id)
-        logger.info(f"Folder share auto-approved for admin: {username}/{folder_path}")
-        return jsonify({"msg": "Folder shared successfully (auto-approved)", "folder_id": folder_id}), 200
+        logger.info(f"Folder share auto-approved for {username}: {folder_path}")
+        return jsonify({"msg": "Folder shared to network", "folder_id": folder_id, "auto_approved": True}), 200
 
     logger.info(f"Folder share request: {username}/{folder_path}")
-    return jsonify({"msg": "Folder share request submitted for approval", "folder_id": folder_id}), 200
+    return jsonify({"msg": "Folder share request submitted for approval", "folder_id": folder_id, "auto_approved": False}), 200
 
 
 @app.route("/api/share/pending", methods=["GET"])
@@ -902,7 +934,6 @@ def remove_share(file_id):
     username = get_jwt_identity()
     user = user_manager.get_user(username)
 
-    # Check if user is admin or file owner
     approved = shared_manager.get_approved()
     file_entry = None
     for entry in approved:
@@ -929,7 +960,6 @@ def remove_folder_share(folder_id):
     username = get_jwt_identity()
     user = user_manager.get_user(username)
 
-    # Check if user is admin or folder owner
     approved_folders = shared_manager.get_approved_folders()
     folder_entry = None
     for entry in approved_folders:
@@ -954,18 +984,68 @@ def remove_folder_share(folder_id):
 @jwt_required()
 def get_network_files():
     """Network files - requires login. Also cleans up missing items."""
-    # Clean up any files/folders that no longer exist
     shared_manager.cleanup_missing_items()
-    
+
     approved_files = shared_manager.get_approved()
     approved_folders = shared_manager.get_approved_folders()
     return jsonify({"files": approved_files, "folders": approved_folders}), 200
 
 
+@app.route("/api/network/folder/<folder_id>/delete", methods=["DELETE"])
+@jwt_required()
+def delete_item_in_shared_folder(folder_id):
+    requester = get_jwt_identity()
+    requester_user = user_manager.get_user(requester)
+
+    approved_folders = shared_manager.get_approved_folders()
+    folder_entry = next((f for f in approved_folders if f["id"] == folder_id), None)
+    if not folder_entry:
+        return jsonify({"msg": "Shared folder not found"}), 404
+
+    owner = folder_entry["username"]
+    if requester != owner and requester_user.get("role") != "admin":
+        return jsonify({"msg": "Access denied — only the owner or an admin can delete items"}), 403
+
+    item_rel = request.args.get("path", "").strip()
+    item_type = request.args.get("type", "file").strip()
+
+    if not item_rel:
+        return jsonify({"msg": "No path provided"}), 400
+
+    item_rel = validate_path(owner, item_rel)
+    user_dir = STORAGE_DIR / owner
+    base_folder = user_dir / folder_entry["folder_path"]
+    item_path = base_folder / item_rel
+
+    try:
+        item_path.resolve().relative_to(base_folder.resolve())
+    except ValueError:
+        return jsonify({"msg": "Access denied — path escapes shared folder"}), 403
+
+    if not item_path.exists():
+        return jsonify({"msg": "Item not found"}), 404
+
+    try:
+        if item_type == "folder" and item_path.is_dir():
+            shutil.rmtree(item_path)
+            logger.info(f"Shared folder item deleted (dir) by {requester}: {owner}/{folder_entry['folder_path']}/{item_rel}")
+        elif item_path.is_file():
+            item_path.unlink()
+            logger.info(f"Shared folder item deleted (file) by {requester}: {owner}/{folder_entry['folder_path']}/{item_rel}")
+        else:
+            return jsonify({"msg": "Type mismatch or item not found"}), 400
+
+        user_manager.update_storage_used(owner)
+        return jsonify({"msg": "Deleted successfully"}), 200
+    except Exception as e:
+        logger.error(f"Error deleting shared folder item: {e}")
+        return jsonify({"msg": f"Delete failed: {str(e)}"}), 500
+
+
 @app.route("/api/network/folder/<folder_id>", methods=["GET"])
 @jwt_required()
-def get_network_folder_contents(folder_id):
-    """Get contents of a shared folder with proper navigation"""
+def get_network_folder(folder_id):
+    """Get contents of a shared folder with proper navigation."""
     approved_folders = shared_manager.get_approved_folders()
 
     folder_entry = None
@@ -977,7 +1057,6 @@ def get_network_folder_contents(folder_id):
     if not folder_entry:
         return jsonify({"msg": "Folder not found"}), 404
 
-    # Get the subfolder path from query params (for navigation within the shared folder)
     subfolder = request.args.get('subfolder', '').strip()
     subfolder = validate_path(folder_entry["username"], subfolder)
 
@@ -985,11 +1064,9 @@ def get_network_folder_contents(folder_id):
     base_folder_path = user_dir / folder_entry["folder_path"]
 
     if not base_folder_path.exists():
-        # Folder doesn't exist - remove from shared folders
         shared_manager.remove_folder_share(folder_id)
         return jsonify({"msg": "Folder no longer exists and has been removed from shares"}), 404
 
-    # Current directory we're viewing
     if subfolder:
         current_path = base_folder_path / subfolder
     else:
@@ -1001,7 +1078,6 @@ def get_network_folder_contents(folder_id):
     files = []
     folders = []
 
-    # List only immediate children (not recursive)
     for item in current_path.iterdir():
         if item.is_file():
             stat = item.stat()
@@ -1025,7 +1101,6 @@ def get_network_folder_contents(folder_id):
                 "modified": stat.st_mtime
             })
 
-    # Sort folders alphabetically and files by modified date
     folders.sort(key=lambda x: x["name"])
     files.sort(key=lambda x: x["modified"], reverse=True)
 
@@ -1049,7 +1124,18 @@ def create_folder():
         return jsonify({"msg": "Folder name required"}), 400
 
     current_path = validate_path(username, current_path)
-    folder_name = secure_filename(folder_name)
+
+    # Preserve hidden folder dots
+    leading_dot = folder_name.startswith('.')
+    inner = folder_name.lstrip('.')
+    safe_name = secure_filename(inner) if inner else ''
+    if leading_dot and safe_name:
+        folder_name = '.' + safe_name
+    elif not leading_dot:
+        folder_name = safe_name or folder_name
+
+    if not folder_name:
+        return jsonify({"msg": "Invalid folder name"}), 400
 
     user_dir = STORAGE_DIR / username
     if current_path:
@@ -1362,15 +1448,14 @@ def bulk_move_files():
             file_path.resolve().relative_to(user_dir.resolve())
             if file_path.exists() and file_path.is_file():
                 dest_path = dest_dir / file_path.name
-                
-                # Handle name conflicts
+
                 if dest_path.exists():
                     name, ext = os.path.splitext(file_path.name)
                     counter = 1
                     while dest_path.exists():
                         dest_path = dest_dir / f"{name}_{counter}{ext}"
                         counter += 1
-                
+
                 shutil.move(str(file_path), str(dest_path))
                 moved.append(filepath)
                 logger.info(f"Bulk move: {username}/{filepath} -> {destination}")
@@ -1417,11 +1502,10 @@ def bulk_share_files():
                     stat.st_size,
                     get_file_type(file_path.name)
                 )
-                
-                # Auto-approve if admin
-                if user["role"] == "admin":
+
+                if should_auto_approve(user):
                     shared_manager.approve_share(file_id)
-                
+
                 shared.append(filepath)
                 logger.info(f"Bulk share: {username}/{filepath}")
             else:
@@ -1467,17 +1551,17 @@ def preview_docx(filepath):
         with open(file_path, "rb") as docx_file:
             result = mammoth.convert_to_html(docx_file)
             html = result.value
-            
+
         html_output = f"""
         <!DOCTYPE html>
         <html>
         <head>
             <meta charset="UTF-8">
             <style>
-                body {{ 
-                    font-family: 'Calibri', 'Arial', sans-serif; 
-                    padding: 40px; 
-                    max-width: 800px; 
+                body {{
+                    font-family: 'Calibri', 'Arial', sans-serif;
+                    padding: 40px;
+                    max-width: 800px;
                     margin: 0 auto;
                     background: #fff;
                     color: #000;
@@ -1523,93 +1607,47 @@ def preview_xlsx(filepath):
 
     try:
         import openpyxl
-        from openpyxl.utils import get_column_letter
-        
         wb = openpyxl.load_workbook(file_path, data_only=True)
-        
+
         html_parts = ['<!DOCTYPE html><html><head><meta charset="UTF-8"><style>']
         html_parts.append("""
-            body { 
-                font-family: 'Calibri', 'Arial', sans-serif; 
-                padding: 20px; 
-                background: #f5f5f5;
-            }
-            .sheet-tabs {
-                margin-bottom: 20px;
-                border-bottom: 2px solid #ddd;
-            }
-            .sheet-tab {
-                display: inline-block;
-                padding: 10px 20px;
-                margin-right: 5px;
-                background: #fff;
-                border: 1px solid #ddd;
-                border-bottom: none;
-                cursor: pointer;
-                border-radius: 5px 5px 0 0;
-            }
-            .sheet-tab.active {
-                background: #4CAF50;
-                color: white;
-                font-weight: bold;
-            }
-            .sheet-content {
-                display: none;
-                background: white;
-                padding: 20px;
-                border-radius: 5px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                overflow-x: auto;
-            }
-            .sheet-content.active {
-                display: block;
-            }
-            table { 
-                border-collapse: collapse; 
-                width: 100%; 
-                background: white;
-            }
-            th, td { 
-                border: 1px solid #ddd; 
-                padding: 8px; 
-                text-align: left;
-                white-space: nowrap;
-            }
-            th { 
-                background-color: #4CAF50; 
-                color: white; 
-                font-weight: bold;
-            }
+            body { font-family: 'Calibri', 'Arial', sans-serif; padding: 20px; background: #f5f5f5; }
+            .sheet-tabs { margin-bottom: 20px; border-bottom: 2px solid #ddd; }
+            .sheet-tab { display: inline-block; padding: 10px 20px; margin-right: 5px; background: #fff;
+                border: 1px solid #ddd; border-bottom: none; cursor: pointer; border-radius: 5px 5px 0 0; }
+            .sheet-tab.active { background: #4CAF50; color: white; font-weight: bold; }
+            .sheet-content { display: none; background: white; padding: 20px; border-radius: 5px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow-x: auto; }
+            .sheet-content.active { display: block; }
+            table { border-collapse: collapse; width: 100%; background: white; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; white-space: nowrap; }
+            th { background-color: #4CAF50; color: white; font-weight: bold; }
             tr:nth-child(even) { background-color: #f9f9f9; }
             tr:hover { background-color: #f5f5f5; }
         </style>
         <script>
-            function showSheet(sheetName) {
+            function showSheet(idx) {
                 document.querySelectorAll('.sheet-content').forEach(s => s.classList.remove('active'));
                 document.querySelectorAll('.sheet-tab').forEach(t => t.classList.remove('active'));
-                document.getElementById('sheet-' + sheetName).classList.add('active');
-                document.getElementById('tab-' + sheetName).classList.add('active');
+                document.getElementById('sheet-' + idx).classList.add('active');
+                document.getElementById('tab-' + idx).classList.add('active');
             }
         </script>
         </head><body>
         """)
-        
-        # Add tabs
+
         html_parts.append('<div class="sheet-tabs">')
         for idx, sheet_name in enumerate(wb.sheetnames):
             active_class = 'active' if idx == 0 else ''
-            safe_name = sheet_name.replace("'", "\\'")
             html_parts.append(f'<div class="sheet-tab {active_class}" id="tab-{idx}" onclick="showSheet({idx})">{sheet_name}</div>')
         html_parts.append('</div>')
-        
-        # Add sheet contents
+
         for idx, sheet_name in enumerate(wb.sheetnames):
             ws = wb[sheet_name]
             active_class = 'active' if idx == 0 else ''
             html_parts.append(f'<div class="sheet-content {active_class}" id="sheet-{idx}">')
-            html_parts.append(f'<h2>{sheet_name}</h2>')
-            html_parts.append('<table>')
-            
+            html_parts.append(f'<h2>{sheet_name}</h2><table>')
+
             for row_idx, row in enumerate(ws.iter_rows(max_row=min(100, ws.max_row)), 1):
                 html_parts.append('<tr>')
                 for cell in row:
@@ -1617,14 +1655,13 @@ def preview_xlsx(filepath):
                     tag = 'th' if row_idx == 1 else 'td'
                     html_parts.append(f'<{tag}>{value}</{tag}>')
                 html_parts.append('</tr>')
-            
+
             if ws.max_row > 100:
                 html_parts.append(f'<tr><td colspan="{ws.max_column}"><em>... showing first 100 rows of {ws.max_row}</em></td></tr>')
-            
+
             html_parts.append('</table></div>')
-        
+
         html_parts.append('</body></html>')
-        
         return ''.join(html_parts), 200, {'Content-Type': 'text/html; charset=utf-8'}
     except Exception as e:
         logger.error(f"XLSX preview error: {str(e)}")
@@ -1733,6 +1770,46 @@ def delete_user(target_username):
     return jsonify({"msg": msg}), 400
 
 
+@app.route("/api/users/<target_username>/trusted", methods=["POST"])
+@jwt_required()
+def set_trusted_uploader(target_username):
+    """Toggle trusted uploader status — admin only."""
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+
+    if user["role"] != "admin":
+        return jsonify({"msg": "Admin access required"}), 403
+
+    data = request.get_json()
+    value = bool(data.get("trusted_uploader", False))
+
+    success, msg = user_manager.set_trusted_uploader(target_username, value)
+    if success:
+        logger.info(f"Trusted uploader set to {value} for {target_username} by {username}")
+        return jsonify({"msg": msg}), 200
+    return jsonify({"msg": msg}), 400
+
+
+@app.route("/api/users/<target_username>/auto_share", methods=["POST"])
+@jwt_required()
+def set_auto_share(target_username):
+    """Toggle auto-share status — admin only."""
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+
+    if user["role"] != "admin":
+        return jsonify({"msg": "Admin access required"}), 403
+
+    data = request.get_json()
+    value = bool(data.get("auto_share", False))
+
+    success, msg = user_manager.set_auto_share(target_username, value)
+    if success:
+        logger.info(f"Auto-share set to {value} for {target_username} by {username}")
+        return jsonify({"msg": msg}), 200
+    return jsonify({"msg": msg}), 400
+
+
 @app.route("/api/account/change-password", methods=["POST"])
 @jwt_required()
 def change_password():
@@ -1777,19 +1854,16 @@ def change_username():
     if not user_manager.authenticate(old_username, password):
         return jsonify({"msg": "Password incorrect"}), 401
 
-    # Update username in users dict
     user_data = user_manager.users[old_username]
     del user_manager.users[old_username]
     user_manager.users[new_username] = user_data
     user_manager.save_users()
 
-    # Rename storage directory
     old_dir = STORAGE_DIR / old_username
     new_dir = STORAGE_DIR / new_username
     if old_dir.exists():
         old_dir.rename(new_dir)
 
-    # Update shared files
     for entry in shared_manager.shared_files.get("pending", []):
         if entry["username"] == old_username:
             entry["username"] = new_username
@@ -1808,7 +1882,6 @@ def change_username():
 
     shared_manager.save_shared_files()
 
-    # Generate new token
     new_token = create_access_token(identity=new_username)
 
     logger.info(f"Username changed from {old_username} to {new_username}")
@@ -1822,26 +1895,14 @@ def change_username():
 @app.route("/api/upload/chunk", methods=["POST"])
 @jwt_required()
 def upload_chunk():
-    """
-    Chunked upload endpoint. The frontend splits large files into chunks and
-    sends them one at a time. Once all chunks arrive they are reassembled.
-
-    Form fields expected per request:
-        file        – the chunk binary
-        upload_id   – unique ID for this upload session (uuid)
-        filename    – original filename
-        chunk_index – 0-based index of this chunk
-        total_chunks– total number of chunks
-        folder      – destination folder (optional)
-    """
     username = get_jwt_identity()
     user = user_manager.get_user(username)
 
-    upload_id   = request.form.get("upload_id", "").strip()
-    filename    = request.form.get("filename", "").strip()
-    chunk_index = int(request.form.get("chunk_index", 0))
-    total_chunks= int(request.form.get("total_chunks", 1))
-    folder_path = validate_path(username, request.form.get("folder", "").strip())
+    upload_id    = request.form.get("upload_id", "").strip()
+    filename     = request.form.get("filename", "").strip()
+    chunk_index  = int(request.form.get("chunk_index", 0))
+    total_chunks = int(request.form.get("total_chunks", 1))
+    folder_path  = validate_path(username, request.form.get("folder", "").strip())
 
     if not upload_id or not filename:
         return jsonify({"msg": "Missing upload_id or filename"}), 400
@@ -1853,15 +1914,12 @@ def upload_chunk():
     if not chunk_file:
         return jsonify({"msg": "No chunk data"}), 400
 
-    # Temp directory for this upload session
     tmp_dir = BASE_DIR / "tmp_uploads" / upload_id
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save this chunk
     chunk_path = tmp_dir / f"chunk_{chunk_index:06d}"
     chunk_file.save(str(chunk_path))
 
-    # Check if all chunks have arrived
     received = len(list(tmp_dir.glob("chunk_*")))
     if received < total_chunks:
         return jsonify({
@@ -1869,18 +1927,20 @@ def upload_chunk():
             "done": False
         }), 200
 
-    # All chunks received — reassemble
     user_dir = STORAGE_DIR / username
     base_dir  = user_dir / folder_path if folder_path else user_dir
     is_folder = request.form.get("is_folder_upload", "false") == "true"
 
-    # If it's a folder upload the "filename" is actually the full webkitRelativePath
-    # e.g. "MyProject/src/main.blend" — preserve that structure
     if is_folder and ("/" in filename or "\\" in filename):
         rel_path    = sanitize_relative_path(filename)
+        if not rel_path:
+            rel_path = secure_filename(filename.replace("\\", "/").rsplit("/", 1)[-1]) or "file"
         target_path = base_dir / rel_path
     else:
-        target_path = base_dir / secure_filename(filename)
+        safe_name = secure_filename(filename)
+        if not safe_name:
+            safe_name = re.sub(r'[^\w\-.]', '_', filename).strip('._') or 'file'
+        target_path = base_dir / safe_name
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1891,6 +1951,9 @@ def upload_chunk():
             target_path = target_path.parent / f"{name}_{counter}{ext}"
             counter += 1
 
+    # Check if uploading into an already-shared folder
+    shared_folder_entry = shared_manager.get_shared_folder_for_path(username, folder_path) if folder_path else None
+
     try:
         with open(target_path, "wb") as out:
             for i in range(total_chunks):
@@ -1898,12 +1961,12 @@ def upload_chunk():
                 with open(cp, "rb") as c:
                     out.write(c.read())
 
-        # Clean up temp chunks
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
         rel = str(target_path.relative_to(user_dir))
 
-        if user.get("auto_share", False):
+        # Auto-share if user has auto_share flag OR uploading into a shared folder
+        if user.get("auto_share", False) or shared_folder_entry:
             stat = target_path.stat()
             fid  = shared_manager.request_share(
                 username, rel, target_path.name,
@@ -1929,7 +1992,6 @@ def upload_chunk():
 @app.route("/api/upload/chunk/cancel", methods=["POST"])
 @jwt_required()
 def cancel_chunked_upload():
-    """Clean up temp chunks if the user cancels mid-upload."""
     data = request.get_json()
     upload_id = (data or {}).get("upload_id", "").strip()
     if upload_id:
@@ -1957,7 +2019,6 @@ if __name__ == "__main__":
     print("\n  ⚠️  CHANGE THE ADMIN PASSWORD AFTER FIRST LOGIN!")
     print("=" * 60 + "\n")
 
-    # Development server — for production use gunicorn (see gunicorn.conf.py)
     debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
     port       = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=debug_mode)
