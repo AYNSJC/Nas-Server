@@ -681,6 +681,7 @@ async function loadFiles(path = '') {
             html += data.files.map((file, index) => {
                 const filePath = currentPath ? currentPath + '/' + file.name : file.name;
                 const canPreview = file.type !== 'other';
+                const canEdit = isEditableFile(file.name);
                 allFiles.push({ path: filePath, type: file.type, name: file.name });
 
                 return `
@@ -697,6 +698,9 @@ async function loadFiles(path = '') {
                             </div>
                         </div>
                         <div class="item-actions">
+                            ${canEdit ? `<button class="btn btn-text btn-edit" onclick="openEditor('${escapeHtml(filePath)}', '${escapeHtml(file.name)}')">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                                Edit</button>` : ''}
                             ${canPreview ? `<button class="btn btn-text" onclick="previewFile('${escapeHtml(filePath)}', ${index})">Preview</button>` : ''}
                             <button class="btn btn-text" onclick="downloadFile('${escapeHtml(filePath)}')">Download</button>
                             ${!file.is_shared ? `<button class="btn btn-text" onclick="requestShare('${escapeHtml(filePath)}')">Share</button>` : ''}
@@ -1577,3 +1581,487 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Enter') login();
     });
 });
+
+/* =====================================================
+   TEXT / MARKDOWN EDITOR
+   ===================================================== */
+
+const EDITABLE_EXTS = new Set(['md','txt','json','xml','csv','log','yaml','yml','toml','ini','cfg','conf']);
+
+function isEditableFile(filename) {
+    if (!filename.includes('.')) return false;
+    return EDITABLE_EXTS.has(filename.split('.').pop().toLowerCase());
+}
+
+// Track unsaved state
+let editorDirty = false;
+let editorFilepath = null;
+let editorFilename = null;
+let editorSaveTimeout = null;
+
+/* ------ Create new text/md file ------ */
+async function createTextFile() {
+    const raw = prompt('File name (e.g. "notes" or "README.md"):');
+    if (raw === null || !raw.trim()) return;
+
+    const filename = raw.trim();
+    try {
+        const res = await fetch('/api/file/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+            body: JSON.stringify({ folder: currentPath, filename })
+        });
+        const data = await safeJson(res);
+        if (!res.ok) throw new Error(data.msg || 'Failed to create file');
+
+        showMessage(`Created ${data.filename}`, 'success', 'mainAlert');
+        await loadFiles(currentPath);
+
+        // Open it in the editor immediately
+        openEditor(data.filepath, data.filename);
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+/* ------ Open editor modal ------ */
+async function openEditor(filepath, filename) {
+    editorFilepath = filepath;
+    editorFilename = filename;
+    editorDirty = false;
+
+    // Load content
+    let content = '';
+    try {
+        const res = await fetch(`/api/file/read/${encodeURIComponent(filepath)}`, {
+            headers: { Authorization: 'Bearer ' + token }
+        });
+        const data = await safeJson(res);
+        if (!res.ok) throw new Error(data.msg || 'Failed to load file');
+        content = data.content;
+    } catch (e) {
+        showMessage(e.message, 'error', 'mainAlert');
+        return;
+    }
+
+    const isMarkdown = filename.toLowerCase().endsWith('.md');
+    const existing = document.getElementById('editorModal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'editorModal';
+    modal.className = 'editor-modal';
+
+    modal.innerHTML = `
+        <div class="editor-shell">
+            <!-- Editor Titlebar -->
+            <div class="editor-titlebar">
+                <div class="editor-titlebar-left">
+                    <div class="editor-file-icon">${isMarkdown ? '📝' : '📄'}</div>
+                    <div class="editor-filename-wrap">
+                        <span class="editor-filename" id="editorFilenameDisplay">${escapeHtml(filename)}</span>
+                        <span class="editor-dirty-dot" id="editorDirtyDot" style="display:none" title="Unsaved changes">●</span>
+                    </div>
+                </div>
+                <div class="editor-titlebar-center">
+                    ${isMarkdown ? `
+                    <div class="editor-mode-tabs">
+                        <button class="editor-mode-tab active" id="tabWrite" onclick="setEditorMode('write')">Write</button>
+                        <button class="editor-mode-tab" id="tabPreview" onclick="setEditorMode('preview')">Preview</button>
+                        <button class="editor-mode-tab" id="tabSplit" onclick="setEditorMode('split')">Split</button>
+                    </div>` : ''}
+                </div>
+                <div class="editor-titlebar-right">
+                    <div class="editor-status" id="editorStatus">Ready</div>
+                    <button class="editor-btn editor-btn-save" id="editorSaveBtn" onclick="saveEditor()" title="Save (Ctrl+S)">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                        Save
+                    </button>
+                    <button class="editor-btn editor-btn-close" onclick="closeEditor()" title="Close">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                        Close
+                    </button>
+                </div>
+            </div>
+
+            ${isMarkdown ? `<!-- MD toolbar -->
+            <div class="editor-toolbar" id="editorToolbar">
+                <div class="editor-toolbar-group">
+                    <button class="editor-tool" onclick="mdWrap('**','**')" title="Bold"><strong>B</strong></button>
+                    <button class="editor-tool" onclick="mdWrap('*','*')" title="Italic"><em>I</em></button>
+                    <button class="editor-tool" onclick="mdWrap('~~','~~')" title="Strikethrough"><s>S</s></button>
+                    <button class="editor-tool" onclick="mdWrap('\`','\`')" title="Inline code"><code style="font-size:12px">{ }</code></button>
+                </div>
+                <div class="editor-toolbar-sep"></div>
+                <div class="editor-toolbar-group">
+                    <button class="editor-tool" onclick="mdInsertLine('# ')" title="Heading 1">H1</button>
+                    <button class="editor-tool" onclick="mdInsertLine('## ')" title="Heading 2">H2</button>
+                    <button class="editor-tool" onclick="mdInsertLine('### ')" title="Heading 3">H3</button>
+                </div>
+                <div class="editor-toolbar-sep"></div>
+                <div class="editor-toolbar-group">
+                    <button class="editor-tool" onclick="mdInsertLine('- ')" title="Bullet list">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="9" y1="6" x2="20" y2="6"></line><line x1="9" y1="12" x2="20" y2="12"></line><line x1="9" y1="18" x2="20" y2="18"></line><circle cx="4" cy="6" r="1" fill="currentColor"></circle><circle cx="4" cy="12" r="1" fill="currentColor"></circle><circle cx="4" cy="18" r="1" fill="currentColor"></circle></svg>
+                    </button>
+                    <button class="editor-tool" onclick="mdInsertLine('1. ')" title="Numbered list">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="6" x2="21" y2="6"></line><line x1="10" y1="12" x2="21" y2="12"></line><line x1="10" y1="18" x2="21" y2="18"></line><path d="M4 6h1v4"></path><path d="M4 10h2"></path><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"></path></svg>
+                    </button>
+                    <button class="editor-tool" onclick="mdInsertLine('- [ ] ')" title="Task list">☑</button>
+                    <button class="editor-tool" onclick="mdInsertLine('> ')" title="Blockquote">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"></path><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3c0 1 0 1 1 1z"></path></svg>
+                    </button>
+                </div>
+                <div class="editor-toolbar-sep"></div>
+                <div class="editor-toolbar-group">
+                    <button class="editor-tool" onclick="mdInsertLink()" title="Link">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                    </button>
+                    <button class="editor-tool" onclick="mdInsertHR()" title="Horizontal rule">—</button>
+                    <button class="editor-tool" onclick="mdInsertCodeBlock()" title="Code block">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+                    </button>
+                    <button class="editor-tool" onclick="mdInsertTable()" title="Table">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line><line x1="12" y1="3" x2="12" y2="21"></line></svg>
+                    </button>
+                </div>
+                <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
+                    <span class="editor-word-count" id="editorWordCount">0 words</span>
+                </div>
+            </div>` : `
+            <div class="editor-toolbar" id="editorToolbar">
+                <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
+                    <span class="editor-word-count" id="editorWordCount">0 words</span>
+                </div>
+            </div>`}
+
+            <!-- Editor body -->
+            <div class="editor-body" id="editorBody">
+                <div class="editor-pane editor-pane-write" id="editorPaneWrite">
+                    <textarea class="editor-textarea" id="editorTextarea" spellcheck="true"
+                        placeholder="Start writing…">${escapeHtml(content)}</textarea>
+                </div>
+                ${isMarkdown ? `
+                <div class="editor-pane editor-pane-preview" id="editorPanePreview" style="display:none;">
+                    <div class="editor-preview-content markdown-body" id="editorPreviewContent"></div>
+                </div>` : ''}
+            </div>
+
+            <!-- Footer / status bar -->
+            <div class="editor-footer">
+                <span id="editorLineCol">Ln 1, Col 1</span>
+                <span class="editor-footer-sep">|</span>
+                <span>${isMarkdown ? 'Markdown' : filename.split('.').pop().toUpperCase()}</span>
+                <span class="editor-footer-sep">|</span>
+                <span>UTF-8</span>
+                <span style="margin-left:auto; font-size:11px; opacity:0.6;">Ctrl+S to save</span>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    const textarea = document.getElementById('editorTextarea');
+
+    // Set initial mode for markdown
+    window._editorIsMarkdown = isMarkdown;
+    window._editorMode = 'write';
+
+    // Events
+    textarea.addEventListener('input', onEditorInput);
+    textarea.addEventListener('keydown', onEditorKeydown);
+    textarea.addEventListener('click', updateLineCol);
+    textarea.addEventListener('keyup', updateLineCol);
+
+    // Init word count & line/col
+    updateWordCount(textarea.value);
+    updateLineCol();
+
+    // If markdown, render preview immediately
+    if (isMarkdown) {
+        renderMarkdownPreview(textarea.value);
+    }
+
+    // Focus
+    textarea.focus();
+    textarea.setSelectionRange(0, 0);
+}
+
+function closeEditor() {
+    if (editorDirty) {
+        if (!confirm('You have unsaved changes. Close anyway?')) return;
+    }
+    const modal = document.getElementById('editorModal');
+    if (modal) modal.remove();
+    editorFilepath = null;
+    editorFilename = null;
+    editorDirty = false;
+    clearTimeout(editorSaveTimeout);
+}
+
+function setEditorDirty(dirty) {
+    editorDirty = dirty;
+    const dot = document.getElementById('editorDirtyDot');
+    const btn = document.getElementById('editorSaveBtn');
+    if (dot) dot.style.display = dirty ? 'inline' : 'none';
+    if (btn) btn.classList.toggle('unsaved', dirty);
+}
+
+function onEditorInput() {
+    setEditorDirty(true);
+    const ta = document.getElementById('editorTextarea');
+    updateWordCount(ta.value);
+    if (window._editorIsMarkdown && window._editorMode !== 'write') {
+        renderMarkdownPreview(ta.value);
+    }
+    updateLineCol();
+
+    // Auto-save after 2s idle
+    clearTimeout(editorSaveTimeout);
+    editorSaveTimeout = setTimeout(() => {
+        if (editorDirty) saveEditor(true);
+    }, 2000);
+}
+
+function onEditorKeydown(e) {
+    // Ctrl+S / Cmd+S → save
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        saveEditor();
+        return;
+    }
+    // Tab → insert 2 spaces
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        const ta = e.target;
+        const start = ta.selectionStart;
+        const end = ta.selectionEnd;
+        ta.value = ta.value.slice(0, start) + '  ' + ta.value.slice(end);
+        ta.selectionStart = ta.selectionEnd = start + 2;
+        onEditorInput();
+    }
+}
+
+function updateLineCol() {
+    const ta = document.getElementById('editorTextarea');
+    const el = document.getElementById('editorLineCol');
+    if (!ta || !el) return;
+    const text = ta.value.slice(0, ta.selectionStart);
+    const lines = text.split('\n');
+    el.textContent = `Ln ${lines.length}, Col ${lines[lines.length - 1].length + 1}`;
+}
+
+function updateWordCount(text) {
+    const el = document.getElementById('editorWordCount');
+    if (!el) return;
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const chars = text.length;
+    el.textContent = `${words} words · ${chars} chars`;
+}
+
+async function saveEditor(silent = false) {
+    if (!editorFilepath) return;
+    const ta = document.getElementById('editorTextarea');
+    if (!ta) return;
+
+    const statusEl = document.getElementById('editorStatus');
+    if (statusEl) statusEl.textContent = 'Saving…';
+
+    try {
+        const res = await fetch(`/api/file/write/${encodeURIComponent(editorFilepath)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+            body: JSON.stringify({ content: ta.value })
+        });
+        const data = await safeJson(res);
+        if (!res.ok) throw new Error(data.msg || 'Save failed');
+
+        setEditorDirty(false);
+        if (statusEl) {
+            statusEl.textContent = 'Saved ✓';
+            setTimeout(() => { if (statusEl) statusEl.textContent = 'Ready'; }, 2000);
+        }
+        if (!silent) showMessage('Saved successfully', 'success', 'mainAlert');
+        // Refresh file list in background
+        loadFiles(currentPath);
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Save failed!';
+        if (!silent) showMessage(e.message, 'error', 'mainAlert');
+    }
+}
+
+/* ------ Mode switcher (write / preview / split) ------ */
+function setEditorMode(mode) {
+    window._editorMode = mode;
+    const write = document.getElementById('editorPaneWrite');
+    const preview = document.getElementById('editorPanePreview');
+    const body = document.getElementById('editorBody');
+    const ta = document.getElementById('editorTextarea');
+
+    document.querySelectorAll('.editor-mode-tab').forEach(t => t.classList.remove('active'));
+    const tab = document.getElementById('tab' + mode.charAt(0).toUpperCase() + mode.slice(1));
+    if (tab) tab.classList.add('active');
+
+    if (mode === 'write') {
+        write.style.display = 'flex';
+        if (preview) preview.style.display = 'none';
+        body.classList.remove('split-mode');
+    } else if (mode === 'preview') {
+        write.style.display = 'none';
+        if (preview) preview.style.display = 'flex';
+        body.classList.remove('split-mode');
+        renderMarkdownPreview(ta.value);
+    } else {
+        write.style.display = 'flex';
+        if (preview) preview.style.display = 'flex';
+        body.classList.add('split-mode');
+        renderMarkdownPreview(ta.value);
+    }
+}
+
+/* ------ Markdown renderer (no external deps, pure JS) ------ */
+function renderMarkdownPreview(text) {
+    const el = document.getElementById('editorPreviewContent');
+    if (!el) return;
+    el.innerHTML = parseMarkdown(text);
+    // Highlight code blocks if possible
+    el.querySelectorAll('pre code').forEach(block => {
+        block.style.display = 'block';
+    });
+}
+
+function parseMarkdown(md) {
+    // Escape HTML first (for security), then apply markdown
+    let html = md
+        // Escape HTML tags
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    // Fenced code blocks (``` ... ```)
+    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
+        `<pre><code class="lang-${lang}">${code.trim()}</code></pre>`);
+
+    // Block: headers
+    html = html.replace(/^###### (.+)$/gm, '<h6>$1</h6>');
+    html = html.replace(/^##### (.+)$/gm, '<h5>$1</h5>');
+    html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+    html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+    // Blockquote
+    html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+    // HR
+    html = html.replace(/^(---|\*\*\*|___)$/gm, '<hr>');
+
+    // Task lists (before regular lists)
+    html = html.replace(/^- \[x\] (.+)$/gm, '<li class="task-done"><input type="checkbox" checked disabled> $1</li>');
+    html = html.replace(/^- \[ \] (.+)$/gm, '<li class="task"><input type="checkbox" disabled> $1</li>');
+
+    // Unordered list items
+    html = html.replace(/^[-*+] (.+)$/gm, '<li>$1</li>');
+    // Ordered list items
+    html = html.replace(/^\d+\. (.+)$/gm, '<oli>$1</oli>');
+
+    // Wrap adjacent <li> in <ul>, <oli> in <ol>
+    html = html.replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`);
+    html = html.replace(/(<oli>.*<\/oli>\n?)+/g, m => `<ol>${m.replace(/<\/?oli>/g, m2 => m2.replace('oli','li'))}</ol>`);
+
+    // Tables
+    html = html.replace(/((?:^\|.+\|\n?)+)/gm, (tableBlock) => {
+        const rows = tableBlock.trim().split('\n');
+        let tableHtml = '<table>';
+        rows.forEach((row, i) => {
+            if (/^\|[-:| ]+\|$/.test(row.trim())) return; // separator row
+            const cells = row.split('|').slice(1, -1);
+            const tag = i === 0 ? 'th' : 'td';
+            tableHtml += '<tr>' + cells.map(c => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>';
+        });
+        tableHtml += '</table>';
+        return tableHtml;
+    });
+
+    // Inline: bold, italic, strikethrough, code, links, images
+    html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2" style="max-width:100%">');
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+
+    // Paragraphs: blank lines → <p> breaks
+    html = html.replace(/\n{2,}/g, '</p><p>');
+    html = '<p>' + html + '</p>';
+
+    // Clean up empty <p>
+    html = html.replace(/<p>\s*<\/p>/g, '');
+    html = html.replace(/<p>(<h[1-6]|<ul|<ol|<blockquote|<pre|<hr|<table)/g, '$1');
+    html = html.replace(/(<\/h[1-6]>|<\/ul>|<\/ol>|<\/blockquote>|<\/pre>|<hr>|<\/table>)<\/p>/g, '$1');
+
+    return html;
+}
+
+/* ------ Markdown toolbar helpers ------ */
+function mdWrap(before, after) {
+    const ta = document.getElementById('editorTextarea');
+    const start = ta.selectionStart, end = ta.selectionEnd;
+    const selected = ta.value.slice(start, end) || 'text';
+    const replacement = before + selected + after;
+    ta.setRangeText(replacement, start, end, 'select');
+    ta.focus();
+    onEditorInput();
+}
+
+function mdInsertLine(prefix) {
+    const ta = document.getElementById('editorTextarea');
+    const start = ta.selectionStart;
+    const lineStart = ta.value.lastIndexOf('\n', start - 1) + 1;
+    ta.setRangeText(prefix, lineStart, lineStart, 'end');
+    ta.focus();
+    onEditorInput();
+}
+
+function mdInsertLink() {
+    const url = prompt('URL:', 'https://');
+    if (!url) return;
+    const text = prompt('Link text:', 'link text') || 'link text';
+    const ta = document.getElementById('editorTextarea');
+    const start = ta.selectionStart, end = ta.selectionEnd;
+    ta.setRangeText(`[${text}](${url})`, start, end, 'end');
+    ta.focus();
+    onEditorInput();
+}
+
+function mdInsertHR() {
+    const ta = document.getElementById('editorTextarea');
+    const pos = ta.selectionStart;
+    ta.setRangeText('\n\n---\n\n', pos, pos, 'end');
+    ta.focus();
+    onEditorInput();
+}
+
+function mdInsertCodeBlock() {
+    const lang = prompt('Language (optional):', '') || '';
+    const ta = document.getElementById('editorTextarea');
+    const start = ta.selectionStart, end = ta.selectionEnd;
+    const selected = ta.value.slice(start, end) || 'code here';
+    ta.setRangeText(`\n\`\`\`${lang}\n${selected}\n\`\`\`\n`, start, end, 'end');
+    ta.focus();
+    onEditorInput();
+}
+
+function mdInsertTable() {
+    const cols = parseInt(prompt('Number of columns:', '3')) || 3;
+    const rows = parseInt(prompt('Number of rows (excluding header):', '2')) || 2;
+    const header = Array.from({length: cols}, (_, i) => ` Col ${i+1} `).join('|');
+    const sep = Array.from({length: cols}, () => ' --- ').join('|');
+    const row = Array.from({length: cols}, () => '     ').join('|');
+    const table = `\n|${header}|\n|${sep}|\n` + Array.from({length: rows}, () => `|${row}|`).join('\n') + '\n';
+    const ta = document.getElementById('editorTextarea');
+    const pos = ta.selectionStart;
+    ta.setRangeText(table, pos, pos, 'end');
+    ta.focus();
+    onEditorInput();
+}

@@ -2000,6 +2000,145 @@ def cancel_chunked_upload():
     return jsonify({"msg": "Upload cancelled"}), 200
 
 
+# ==================== TEXT FILE EDITOR ENDPOINTS ====================
+
+EDITABLE_EXTENSIONS = {'md', 'txt', 'json', 'xml', 'csv', 'log', 'yaml', 'yml',
+                        'toml', 'ini', 'cfg', 'conf'}
+MAX_EDITABLE_SIZE = 5 * 1024 * 1024  # 5 MB
+
+
+def is_editable(filename):
+    if '.' not in filename:
+        return False
+    ext = filename.rsplit('.', 1)[1].lower()
+    return ext in EDITABLE_EXTENSIONS
+
+
+@app.route("/api/file/read/<path:filepath>", methods=["GET"])
+@jwt_required()
+def read_file_content(filepath):
+    """Read a text file's content for editing."""
+    username = get_jwt_identity()
+    filepath = validate_path(username, filepath)
+    user_dir = STORAGE_DIR / username
+    file_path = user_dir / filepath
+
+    try:
+        file_path.resolve().relative_to(user_dir.resolve())
+    except ValueError:
+        return jsonify({"msg": "Access denied"}), 403
+
+    if not file_path.exists():
+        return jsonify({"msg": "File not found"}), 404
+
+    if not is_editable(file_path.name):
+        return jsonify({"msg": "File type not editable"}), 400
+
+    if file_path.stat().st_size > MAX_EDITABLE_SIZE:
+        return jsonify({"msg": "File too large to edit (max 5 MB)"}), 400
+
+    try:
+        content = file_path.read_text(encoding='utf-8')
+        return jsonify({
+            "content": content,
+            "filename": file_path.name,
+            "filepath": filepath,
+            "size": file_path.stat().st_size
+        }), 200
+    except UnicodeDecodeError:
+        return jsonify({"msg": "File is not valid UTF-8 text"}), 400
+    except Exception as e:
+        logger.error(f"Read file error: {e}")
+        return jsonify({"msg": f"Failed to read file: {str(e)}"}), 500
+
+
+@app.route("/api/file/write/<path:filepath>", methods=["POST"])
+@jwt_required()
+def write_file_content(filepath):
+    """Write/save content to a text file."""
+    username = get_jwt_identity()
+    filepath = validate_path(username, filepath)
+    user_dir = STORAGE_DIR / username
+    file_path = user_dir / filepath
+
+    try:
+        file_path.resolve().relative_to(user_dir.resolve())
+    except ValueError:
+        return jsonify({"msg": "Access denied"}), 403
+
+    if not is_editable(file_path.name):
+        return jsonify({"msg": "File type not editable"}), 400
+
+    data = request.get_json()
+    content = data.get("content", "")
+
+    if len(content.encode('utf-8')) > MAX_EDITABLE_SIZE:
+        return jsonify({"msg": "Content too large (max 5 MB)"}), 400
+
+    try:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding='utf-8')
+        user_manager.update_storage_used(username)
+        logger.info(f"File written: {username}/{filepath}")
+        return jsonify({"msg": "Saved", "size": file_path.stat().st_size}), 200
+    except Exception as e:
+        logger.error(f"Write file error: {e}")
+        return jsonify({"msg": f"Failed to save: {str(e)}"}), 500
+
+
+@app.route("/api/file/create", methods=["POST"])
+@jwt_required()
+def create_text_file():
+    """Create a new text/markdown file."""
+    username = get_jwt_identity()
+    data = request.get_json()
+    folder_path = validate_path(username, data.get("folder", "").strip())
+    filename = data.get("filename", "").strip()
+
+    if not filename:
+        return jsonify({"msg": "Filename required"}), 400
+
+    # Ensure .md extension by default if no extension given
+    if '.' not in filename:
+        filename += '.md'
+
+    ext = filename.rsplit('.', 1)[1].lower()
+    if ext not in EDITABLE_EXTENSIONS:
+        return jsonify({"msg": f"Extension .{ext} not allowed for text files"}), 400
+
+    # Sanitize filename, preserving leading dot for hidden files
+    leading_dot = filename.startswith('.')
+    inner = filename.lstrip('.')
+    safe = secure_filename(inner) if inner else ''
+    if not safe:
+        return jsonify({"msg": "Invalid filename"}), 400
+    filename = ('.' + safe) if leading_dot else safe
+
+    user_dir = STORAGE_DIR / username
+    base = user_dir / folder_path if folder_path else user_dir
+    file_path = base / filename
+
+    try:
+        file_path.resolve().relative_to(user_dir.resolve())
+    except ValueError:
+        return jsonify({"msg": "Access denied"}), 403
+
+    if file_path.exists():
+        return jsonify({"msg": "File already exists"}), 400
+
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        initial = f"# {filename.rsplit('.', 1)[0]}\n\n" if filename.endswith('.md') else ""
+        file_path.write_text(initial, encoding='utf-8')
+        user_manager.update_storage_used(username)
+        rel = str(file_path.relative_to(user_dir))
+        logger.info(f"Text file created: {username}/{rel}")
+        return jsonify({"msg": "File created", "filepath": rel, "filename": filename}), 200
+    except Exception as e:
+        logger.error(f"Create file error: {e}")
+        return jsonify({"msg": f"Failed to create file: {str(e)}"}), 500
+
+
 if __name__ == "__main__":
     try:
         import PIL
