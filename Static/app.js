@@ -14,8 +14,9 @@ let currentNetworkSubfolder = '';
 let selectedNetworkItems = new Set();
 let allNetworkItems = [];
 
-// Pinned folders state
-let pinnedFolders = JSON.parse(localStorage.getItem('pinnedFolders') || '[]');
+// Pinned folders + favorites (server-synced)
+let pinnedFolders = [];
+let userFavorites = new Set(); // set of file paths
 
 /* ========================
    UPLOAD QUEUE + CANCEL
@@ -60,7 +61,7 @@ function cancelUpload() {
             body: JSON.stringify({ upload_id: uploadQueue.activeUploadId })
         }).catch(() => {});
     }
-    showMessage('Upload cancelled', 'error', 'mainAlert');
+    showToast('Upload cancelled', 'error');
     uploadProgressHide();
 }
 
@@ -109,37 +110,61 @@ initTheme();
 if (token) showMainPanel();
 
 /* =======================
-   PINNED FOLDERS
+   PINNED FOLDERS (server-synced)
    ======================= */
-function addPinnedFolder() {
-    if (!currentPath) {
-        showMessage('Navigate to a folder first', 'error', 'mainAlert');
-        return;
-    }
-    if (pinnedFolders.some(f => f.path === currentPath)) {
-        showMessage('Folder already pinned', 'error', 'mainAlert');
-        return;
-    }
-    const folderName = currentPath.split('/').pop() || 'Root';
-    pinnedFolders.push({ path: currentPath, name: folderName });
-    localStorage.setItem('pinnedFolders', JSON.stringify(pinnedFolders));
-    renderPinnedFolders();
-    showMessage('Folder pinned', 'success', 'mainAlert');
+async function loadPinnedFolders() {
+    try {
+        const res = await fetch('/api/pinned', { headers: { Authorization: 'Bearer ' + token } });
+        if (!res.ok) return;
+        const data = await safeJson(res);
+        pinnedFolders = data.pinned || [];
+        renderPinnedFolders();
+    } catch (e) { /* silently ignore */ }
 }
 
-function unpinFolder(path) {
-    pinnedFolders = pinnedFolders.filter(f => f.path !== path);
-    localStorage.setItem('pinnedFolders', JSON.stringify(pinnedFolders));
-    renderPinnedFolders();
+async function addPinnedFolder() {
+    if (!currentPath) {
+        showToast('Navigate to a folder first', 'error');
+        return;
+    }
+    try {
+        const res = await fetch('/api/pinned', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+            body: JSON.stringify({ path: currentPath, name: currentPath.split('/').pop() || 'Root' })
+        });
+        const data = await safeJson(res);
+        if (res.status === 409) { showToast('Already pinned', 'error'); return; }
+        if (!res.ok) throw new Error(data.msg);
+        pinnedFolders = data.pinned;
+        renderPinnedFolders();
+        showToast('Folder pinned', 'success');
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function unpinFolder(path) {
+    try {
+        const res = await fetch('/api/pinned', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+            body: JSON.stringify({ path })
+        });
+        const data = await safeJson(res);
+        pinnedFolders = data.pinned;
+        renderPinnedFolders();
+    } catch (e) { /* ignore */ }
 }
 
 function renderPinnedFolders() {
     const container = document.getElementById('pinnedFolders');
+    const section = document.getElementById('pinnedSection');
     if (!container) return;
     if (pinnedFolders.length === 0) {
-        container.innerHTML = '<div style="font-size: 12px; color: var(--text-tertiary); padding: 8px 12px;">No pinned folders</div>';
+        container.innerHTML = '';
+        if (section) section.style.display = 'none';
         return;
     }
+    if (section) section.style.display = 'block';
     container.innerHTML = pinnedFolders.map(folder => `
         <div class="pinned-folder-item" onclick="loadFiles('${escapeHtml(folder.path)}')">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -154,6 +179,43 @@ function renderPinnedFolders() {
             </button>
         </div>
     `).join('');
+}
+
+/* =======================
+   FAVORITES (server-synced)
+   ======================= */
+async function loadFavorites() {
+    try {
+        const res = await fetch('/api/favorites', { headers: { Authorization: 'Bearer ' + token } });
+        if (!res.ok) return;
+        const data = await safeJson(res);
+        userFavorites = new Set((data.favorites || []).map(f => f.path));
+    } catch (e) { /* ignore */ }
+}
+
+async function toggleFavorite(filePath, fileName, event) {
+    if (event) event.stopPropagation();
+    const isFav = userFavorites.has(filePath);
+    try {
+        const res = await fetch('/api/favorites', {
+            method: isFav ? 'DELETE' : 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+            body: JSON.stringify({ path: filePath, name: fileName })
+        });
+        if (!res.ok && res.status !== 409) return;
+        const data = await safeJson(res);
+        userFavorites = new Set((data.favorites || []).map(f => f.path));
+        // Update star in UI without full reload
+        const btn = document.querySelector(`.fav-btn[data-path="${CSS.escape(filePath)}"]`);
+        if (btn) btn.innerHTML = getFavStar(filePath);
+    } catch (e) { /* ignore */ }
+}
+
+function getFavStar(filePath) {
+    const on = userFavorites.has(filePath);
+    return on
+        ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="#f9ab00" stroke="#f9ab00" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
+        : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
 }
 
 /* =======================
@@ -208,7 +270,7 @@ async function bulkDownloadNetwork() {
             await new Promise(resolve => setTimeout(resolve, 100));
         }
     }
-    showMessage(`Downloading ${selectedNetworkItems.size} file(s)`, 'success', 'mainAlert');
+    showToast(`Downloading ${selectedNetworkItems.size} file(s)`, 'success');
 }
 
 /* =======================
@@ -229,9 +291,24 @@ async function safeJson(res) {
    ======================= */
 function showMessage(msg, type, container = 'alert') {
     const el = document.getElementById(container);
+    if (!el) { showToast(msg, type); return; }
     el.textContent = msg;
     el.className = 'alert alert-' + type + ' show';
-    setTimeout(() => el.classList.remove('show'), 5000);
+    setTimeout(() => el.classList.remove('show'), 4000);
+}
+
+// Non-layout-shifting toast notification
+function showToast(msg, type = 'success') {
+    let toast = document.getElementById('globalToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'globalToast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = msg;
+    toast.className = 'global-toast toast-' + type + ' show';
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => toast.classList.remove('show'), 3500);
 }
 
 function showLogin() {
@@ -288,6 +365,53 @@ function updateMobileNav(tab) {
     document.querySelectorAll('.mobile-nav-btn').forEach(b => b.classList.remove('active'));
     const btn = document.getElementById('mobile' + tab.charAt(0).toUpperCase() + tab.slice(1) + 'Btn');
     if (btn) btn.classList.add('active');
+}
+
+function showMobileUploadMenu() {
+    const existing = document.getElementById('mobileUploadSheet');
+    if (existing) { existing.remove(); return; }
+    
+    const sheet = document.createElement('div');
+    sheet.id = 'mobileUploadSheet';
+    sheet.className = 'mobile-upload-sheet';
+    sheet.innerHTML = `
+        <div class="mobile-sheet-backdrop" onclick="document.getElementById('mobileUploadSheet').remove()"></div>
+        <div class="mobile-sheet-panel">
+            <div class="mobile-sheet-handle"></div>
+            <div class="mobile-sheet-title">Add files</div>
+            <button class="mobile-sheet-item" onclick="document.getElementById('fileInput').click(); document.getElementById('mobileUploadSheet').remove()">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <div>
+                    <div class="mobile-sheet-item-title">Upload Files</div>
+                    <div class="mobile-sheet-item-sub">Photos, videos, documents</div>
+                </div>
+            </button>
+            <button class="mobile-sheet-item" onclick="document.getElementById('folderInput').click(); document.getElementById('mobileUploadSheet').remove()">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+                <div>
+                    <div class="mobile-sheet-item-title">Upload Folder</div>
+                    <div class="mobile-sheet-item-sub">Upload an entire folder</div>
+                </div>
+            </button>
+            <button class="mobile-sheet-item" onclick="createFolder(); document.getElementById('mobileUploadSheet').remove()">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+                <div>
+                    <div class="mobile-sheet-item-title">New Folder</div>
+                    <div class="mobile-sheet-item-sub">Create an empty folder here</div>
+                </div>
+            </button>
+            <button class="mobile-sheet-item" onclick="createTextFile(); document.getElementById('mobileUploadSheet').remove()">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+                <div>
+                    <div class="mobile-sheet-item-title">New Text File</div>
+                    <div class="mobile-sheet-item-sub">Create and edit a text file</div>
+                </div>
+            </button>
+        </div>
+    `;
+    document.body.appendChild(sheet);
+    // Animate in
+    requestAnimationFrame(() => sheet.classList.add('open'));
 }
 
 /* =======================
@@ -518,8 +642,8 @@ function showMainPanel() {
     }
 
     currentPath = '';
-    renderPinnedFolders();
-    loadFiles();
+    // Load server-synced data then files
+    Promise.all([loadPinnedFolders(), loadFavorites()]).then(() => loadFiles());
 }
 
 /* =======================
@@ -576,11 +700,11 @@ async function bulkDeleteFiles() {
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Bulk delete failed');
         const data = await safeJson(res);
-        showMessage(data.msg, 'success', 'mainAlert');
+        showToast(data.msg, 'success');
         clearSelection();
         loadFiles(currentPath);
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -596,11 +720,11 @@ async function bulkMoveFiles() {
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Bulk move failed');
         const data = await safeJson(res);
-        showMessage(data.msg, 'success', 'mainAlert');
+        showToast(data.msg, 'success');
         clearSelection();
         loadFiles(currentPath);
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -615,11 +739,11 @@ async function bulkShareFiles() {
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Bulk share failed');
         const data = await safeJson(res);
-        showMessage(data.msg, 'success', 'mainAlert');
+        showToast(data.msg, 'success');
         clearSelection();
         loadFiles(currentPath);
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -714,6 +838,9 @@ async function loadFiles(path = '') {
                 const canEdit = isEditableFile(file.name);
                 newFiles.push({ path: filePath, type: file.type, name: file.name });
 
+                const nameClick = canPreview
+                    ? `onclick="previewFile('${escapeHtml(filePath)}', ${index})"` 
+                    : (canEdit ? `onclick="openEditor('${escapeHtml(filePath)}', '${escapeHtml(file.name)}')"` : '');
                 return `
                     <div class="list-item"
                          draggable="true"
@@ -723,15 +850,20 @@ async function loadFiles(path = '') {
                         <div class="item-info" style="display: flex; align-items: center; gap: 12px;">
                             <input type="checkbox" class="file-checkbox" data-filepath="${escapeHtml(filePath)}"
                                    onclick="toggleFileSelection('${escapeHtml(filePath)}'); event.stopPropagation();">
-                            <div style="flex: 1;">
-                                <div class="item-name">
-                                    ${getFileIcon(file.type)} ${escapeHtml(file.name)}
+                            <div style="flex: 1; min-width: 0;">
+                                <div class="item-name ${canPreview || canEdit ? 'item-name-clickable' : ''}" ${nameClick}>
+                                    ${getFileIcon(file.type)} <span class="item-name-text">${escapeHtml(file.name)}</span>
                                     ${file.is_shared ? '<span class="badge badge-shared">Shared</span>' : ''}
                                 </div>
                                 <div class="item-meta">${file.size_formatted} • ${formatDate(file.modified)}</div>
                             </div>
                         </div>
                         <div class="item-actions">
+                            <button class="fav-btn icon-btn" data-path="${escapeHtml(filePath)}"
+                                    onclick="toggleFavorite('${escapeHtml(filePath)}', '${escapeHtml(file.name)}', event)"
+                                    title="${userFavorites.has(filePath) ? 'Remove from favorites' : 'Add to favorites'}">
+                                ${getFavStar(filePath)}
+                            </button>
                             <div class="kebab-wrap">
                                 <button class="btn-kebab" onclick="toggleMenu(event, '${pathToId('mf-'+filePath)}')" title="Options">
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
@@ -752,9 +884,11 @@ async function loadFiles(path = '') {
                                     <button class="kebab-item" onclick="promptMoveItem('${escapeHtml(filePath)}', 'file'); closeAllMenus()">
                                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="5 9 2 12 5 15"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
                                         Move</button>
+                                    <button class="kebab-item kebab-item-danger" onclick="deleteFile('${escapeHtml(filePath)}'); closeAllMenus()">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                                        Delete</button>
                                 </div>
                             </div>
-                            <button class="btn btn-text btn-danger-text" onclick="deleteFile('${escapeHtml(filePath)}')">Delete</button>
                         </div>
                     </div>`;
             }).join('');
@@ -768,7 +902,7 @@ async function loadFiles(path = '') {
         fileListEl.innerHTML = html;
         updateBulkActionsBar();
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -818,10 +952,10 @@ async function createFolder() {
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to create folder');
         const data = await safeJson(res);
-        showMessage(data.msg, 'success', 'mainAlert');
+        showToast(data.msg, 'success');
         loadFiles(currentPath);
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -834,10 +968,10 @@ async function deleteFolder(folderPath) {
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to delete folder');
         const data = await safeJson(res);
-        showMessage(data.msg, 'success', 'mainAlert');
+        showToast(data.msg, 'success');
         loadFiles(currentPath);
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -920,6 +1054,9 @@ async function uploadFiles() {
     const files = Array.from(fileInput.files);
     if (!files.length) return;
 
+    // Lock destination at upload START — changing folders won't affect in-progress upload
+    const uploadDestination = currentPath;
+
     uploadQueue.total += files.length;
     uploadProgressShow();
 
@@ -928,12 +1065,12 @@ async function uploadFiles() {
     for (const file of files) {
         if (uploadQueue.cancelled) break;
         try {
-            await uploadWithChunks(file, currentPath, null);
+            await uploadWithChunks(file, uploadDestination, null);
             succeeded++;
         } catch (e) {
             if (e.message === 'Cancelled') break;
             failed++;
-            showMessage(`"${file.name}" failed: ${e.message}`, 'error', 'mainAlert');
+            showToast(`"${file.name}" failed: ${e.message}`, 'error');
         }
         uploadQueue.done++;
     }
@@ -945,15 +1082,18 @@ async function uploadFiles() {
     if (!uploadQueue.cancelled) {
         uploadProgressHide();
         if (failed === 0 && succeeded > 0)
-            showMessage(`Uploaded ${succeeded} file${succeeded !== 1 ? 's' : ''} successfully`, 'success', 'mainAlert');
+            showToast(`Uploaded ${succeeded} file${succeeded !== 1 ? 's' : ''} successfully`, 'success');
         else if (succeeded > 0 || failed > 0)
-            showMessage(`${succeeded} uploaded, ${failed} failed`, failed > 0 ? 'error' : 'success', 'mainAlert');
+            showToast(`${succeeded} uploaded, ${failed} failed`, failed > 0 ? 'error' : 'success');
     }
 }
 
 async function uploadFolder() {
     const files = Array.from(document.getElementById('folderInput').files);
     if (!files.length) return;
+
+    // Lock destination at upload START
+    const uploadDestination = currentPath;
 
     uploadQueue.total += files.length;
     uploadProgressShow();
@@ -964,7 +1104,7 @@ async function uploadFolder() {
         if (uploadQueue.cancelled) break;
         const relPath = file.webkitRelativePath || file.name;
         try {
-            await uploadWithChunks(file, currentPath, relPath);
+            await uploadWithChunks(file, uploadDestination, relPath);
             succeeded++;
         } catch (e) {
             if (e.message === 'Cancelled') break;
@@ -980,9 +1120,9 @@ async function uploadFolder() {
     if (!uploadQueue.cancelled) {
         uploadProgressHide();
         if (failed === 0 && succeeded > 0)
-            showMessage(`Uploaded ${succeeded} file${succeeded !== 1 ? 's' : ''} successfully`, 'success', 'mainAlert');
+            showToast(`Uploaded ${succeeded} file${succeeded !== 1 ? 's' : ''} successfully`, 'success');
         else if (succeeded > 0 || failed > 0)
-            showMessage(`${succeeded} uploaded, ${failed} failed`, failed > 0 ? 'error' : 'success', 'mainAlert');
+            showToast(`${succeeded} uploaded, ${failed} failed`, failed > 0 ? 'error' : 'success');
     }
 }
 
@@ -1011,91 +1151,110 @@ function previewFile(filepath, index = -1) {
 }
 
 function openPreviewModal(previewUrl, filename, index, total, mode = 'iframe') {
-    // Remove existing
     const existing = document.getElementById('previewModal');
     if (existing) existing.remove();
 
-    const modal = document.createElement('div');
-    modal.className = 'preview-modal';
-    modal.id = 'previewModal';
-    // For video: use a plain black background with no overlay fade effect
-    if (mode === 'video') {
-        modal.style.background = '#000';
-        modal.style.padding = '0';
-    }
-    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
-
-    const content = document.createElement('div');
-    content.className = 'preview-content';
-
-    // Build nav header
     const hasNav = index >= 0 && total > 1;
     const hasPrev = index > 0;
     const hasNext = index < total - 1;
 
-    let mediaContent;
     if (mode === 'video') {
-        mediaContent = `
-            <div class="video-preview-wrap">
-                <video id="previewVideo" class="preview-video" controls autoplay preload="metadata"
-                       style="max-width:100%;max-height:70vh;background:#000;outline:none;">
-                    <source src="${previewUrl}">
-                    Your browser does not support the video tag.
-                </video>
-                <div class="video-controls-bar">
-                    <div class="video-controls-left">
-                        <label class="video-ctrl-label">Speed:</label>
-                        <select class="video-speed-select" onchange="setVideoSpeed(this.value)">
+        // ── YouTube-style video player ──────────────────────────────
+        const modal = document.createElement('div');
+        modal.id = 'previewModal';
+        modal.className = 'video-modal';
+
+        modal.innerHTML = `
+            <div class="video-modal-inner" onclick="event.stopPropagation()">
+                <div class="video-modal-topbar">
+                    ${hasNav && hasPrev ? `<button class="vmb" onclick="navigatePreview(-1)">‹ Prev</button>` : '<span></span>'}
+                    <span class="video-modal-title">${escapeHtml(filename)}</span>
+                    ${hasNav && hasNext ? `<button class="vmb" onclick="navigatePreview(1)">Next ›</button>` : '<span></span>'}
+                    <button class="vmb vmb-close" onclick="document.getElementById('previewModal').remove()">✕</button>
+                </div>
+                <div class="video-modal-player">
+                    <video id="previewVideo"
+                           controls autoplay preload="auto"
+                           class="video-player-el"
+                           playsinline
+                           webkit-playsinline>
+                        <source src="${previewUrl}">
+                    </video>
+                </div>
+                <div class="video-modal-bar">
+                    <div class="vmb-group">
+                        <span class="vmb-label">Speed</span>
+                        <select class="vmb-select" onchange="setVideoSpeed(this.value)">
                             <option value="0.25">0.25×</option>
                             <option value="0.5">0.5×</option>
                             <option value="0.75">0.75×</option>
-                            <option value="1" selected>1×</option>
+                            <option value="1" selected>Normal</option>
                             <option value="1.25">1.25×</option>
                             <option value="1.5">1.5×</option>
                             <option value="1.75">1.75×</option>
                             <option value="2">2×</option>
                         </select>
                     </div>
-                    <div class="video-controls-right">
-                        <label class="video-ctrl-label">Quality:</label>
-                        <span class="video-quality-info" id="videoQualityInfo">Auto</span>
-                        <button class="btn btn-text" style="font-size:12px;" onclick="toggleVideoFullscreen()">⛶ Fullscreen</button>
-                    </div>
+                    <span class="vmb-res" id="videoQualityInfo"></span>
+                    <button class="vmb vmb-fs" onclick="toggleVideoFullscreen()">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                        Fullscreen
+                    </button>
                 </div>
-            </div>`;
-    } else {
-        mediaContent = `<iframe src="${previewUrl}" class="preview-frame" allowfullscreen></iframe>`;
-    }
-
-    content.innerHTML = `
-        <div class="preview-header">
-            <div class="preview-nav">
-                ${hasNav && hasPrev ? `<button class="preview-nav-btn" onclick="navigatePreview(-1); event.stopPropagation();">← Prev</button>` : '<div></div>'}
-                <div class="preview-filename">${escapeHtml(filename)}</div>
-                ${hasNav && hasNext ? `<button class="preview-nav-btn" onclick="navigatePreview(1); event.stopPropagation();">Next →</button>` : '<div></div>'}
             </div>
-            <button class="preview-close-inline" onclick="document.getElementById('previewModal').remove()">×</button>
-        </div>
-        ${mediaContent}
-    `;
+        `;
 
-    modal.appendChild(content);
-    document.body.appendChild(modal);
+        // Close on backdrop click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.remove();
+        });
 
-    // Update video quality info after metadata loads
-    if (mode === 'video') {
+        document.body.appendChild(modal);
+
         const vid = document.getElementById('previewVideo');
         if (vid) {
-            vid.addEventListener('loadedmetadata', () => {
-                const qi = document.getElementById('videoQualityInfo');
-                if (qi) qi.textContent = `${vid.videoWidth}×${vid.videoHeight}`;
-            });
-            // Restore saved speed
             const savedSpeed = parseFloat(localStorage.getItem('videoSpeed') || '1');
             vid.playbackRate = savedSpeed;
-            const sel = content.querySelector('.video-speed-select');
-            if (sel) sel.value = String(savedSpeed);
+            modal.querySelector('.vmb-select').value = String(savedSpeed);
+            vid.addEventListener('loadedmetadata', () => {
+                const qi = document.getElementById('videoQualityInfo');
+                if (qi && vid.videoWidth) qi.textContent = `${vid.videoWidth}×${vid.videoHeight}`;
+            });
         }
+
+        // Keyboard shortcut to close
+        const escHandler = (e) => {
+            if (e.key === 'Escape' && !document.fullscreenElement) {
+                modal.remove();
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
+
+    } else {
+        // ── Standard iframe preview ─────────────────────────────────
+        const modal = document.createElement('div');
+        modal.className = 'preview-modal';
+        modal.id = 'previewModal';
+        modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+        const content = document.createElement('div');
+        content.className = 'preview-content';
+
+        content.innerHTML = `
+            <div class="preview-header">
+                <div class="preview-nav">
+                    ${hasNav && hasPrev ? `<button class="preview-nav-btn" onclick="navigatePreview(-1); event.stopPropagation();">← Prev</button>` : '<div></div>'}
+                    <div class="preview-filename">${escapeHtml(filename)}</div>
+                    ${hasNav && hasNext ? `<button class="preview-nav-btn" onclick="navigatePreview(1); event.stopPropagation();">Next →</button>` : '<div></div>'}
+                </div>
+                <button class="preview-close-inline" onclick="document.getElementById('previewModal').remove()">×</button>
+            </div>
+            <iframe src="${previewUrl}" class="preview-frame" allowfullscreen></iframe>
+        `;
+
+        modal.appendChild(content);
+        document.body.appendChild(modal);
     }
 }
 
@@ -1113,7 +1272,8 @@ function toggleVideoFullscreen() {
     if (document.fullscreenElement) {
         document.exitFullscreen();
     } else {
-        vid.requestFullscreen && vid.requestFullscreen();
+        const container = vid.closest('.video-modal-player') || vid;
+        (container.requestFullscreen || vid.requestFullscreen.bind(vid))();
     }
 }
 
@@ -1141,10 +1301,10 @@ async function deleteFile(filepath) {
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Delete failed');
         const data = await safeJson(res);
-        showMessage(data.msg, 'success', 'mainAlert');
+        showToast(data.msg, 'success');
         loadFiles(currentPath);
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -1161,10 +1321,10 @@ async function requestShare(filepath) {
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to request share');
         const data = await safeJson(res);
-        showMessage(data.msg, 'success', 'mainAlert');
+        showToast(data.msg, 'success');
         loadFiles(currentPath);
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -1178,10 +1338,10 @@ async function requestFolderShare(folderPath) {
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to request folder share');
         const data = await safeJson(res);
-        showMessage(data.msg, 'success', 'mainAlert');
+        showToast(data.msg, 'success');
         loadFiles(currentPath);
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -1233,7 +1393,7 @@ async function loadPendingShares() {
         }
         sharesListEl.innerHTML = html;
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -1243,9 +1403,9 @@ async function approveShare(fileId) {
             method: 'POST', headers: { Authorization: 'Bearer ' + token }
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to approve');
-        showMessage((await safeJson(res)).msg, 'success', 'mainAlert');
+        showToast((await safeJson(res)).msg, 'success');
         loadPendingShares();
-    } catch (e) { showMessage(e.message, 'error', 'mainAlert'); }
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
 async function approveFolderShare(folderId) {
@@ -1254,9 +1414,9 @@ async function approveFolderShare(folderId) {
             method: 'POST', headers: { Authorization: 'Bearer ' + token }
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to approve folder');
-        showMessage((await safeJson(res)).msg, 'success', 'mainAlert');
+        showToast((await safeJson(res)).msg, 'success');
         loadPendingShares();
-    } catch (e) { showMessage(e.message, 'error', 'mainAlert'); }
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
 async function rejectShare(fileId) {
@@ -1266,9 +1426,9 @@ async function rejectShare(fileId) {
             method: 'POST', headers: { Authorization: 'Bearer ' + token }
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to reject');
-        showMessage((await safeJson(res)).msg, 'success', 'mainAlert');
+        showToast((await safeJson(res)).msg, 'success');
         loadPendingShares();
-    } catch (e) { showMessage(e.message, 'error', 'mainAlert'); }
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
 async function rejectFolderShare(folderId) {
@@ -1278,9 +1438,9 @@ async function rejectFolderShare(folderId) {
             method: 'POST', headers: { Authorization: 'Bearer ' + token }
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to reject folder');
-        showMessage((await safeJson(res)).msg, 'success', 'mainAlert');
+        showToast((await safeJson(res)).msg, 'success');
         loadPendingShares();
-    } catch (e) { showMessage(e.message, 'error', 'mainAlert'); }
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
 async function loadNetworkFiles() {
@@ -1356,7 +1516,7 @@ async function loadNetworkFiles() {
         networkListEl.innerHTML = html;
         updateNetworkBulkActionsBar();
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -1373,7 +1533,7 @@ async function viewNetworkFolder(folderId, subfolder) {
         if (!res.ok) {
             const error = (await safeJson(res)).msg || 'Failed to load folder';
             if (error.includes('removed from shares')) {
-                showMessage(error, 'error', 'mainAlert');
+                showToast(error, 'error');
                 loadNetworkFiles();
                 return;
             }
@@ -1453,7 +1613,7 @@ async function viewNetworkFolder(folderId, subfolder) {
 
         document.getElementById('networkList').innerHTML = html;
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -1464,9 +1624,9 @@ async function removeFolderShare(folderId) {
             method: 'DELETE', headers: { Authorization: 'Bearer ' + token }
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to remove folder share');
-        showMessage((await safeJson(res)).msg, 'success', 'mainAlert');
+        showToast((await safeJson(res)).msg, 'success');
         loadNetworkFiles();
-    } catch (e) { showMessage(e.message, 'error', 'mainAlert'); }
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
 async function deleteSharedItem(folderId, itemPath, itemType, itemName) {
@@ -1477,9 +1637,9 @@ async function deleteSharedItem(folderId, itemPath, itemType, itemName) {
                     `?path=${encodeURIComponent(itemPath)}&type=${encodeURIComponent(itemType)}`;
         const res = await fetch(url, { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Delete failed');
-        showMessage((await safeJson(res)).msg, 'success', 'mainAlert');
+        showToast((await safeJson(res)).msg, 'success');
         viewNetworkFolder(folderId, currentNetworkSubfolder);
-    } catch (e) { showMessage(e.message, 'error', 'mainAlert'); }
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
 function previewNetworkFile(fileId, fileType) {
@@ -1499,9 +1659,9 @@ async function removeNetworkShare(fileId) {
             method: 'DELETE', headers: { Authorization: 'Bearer ' + token }
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to remove share');
-        showMessage((await safeJson(res)).msg, 'success', 'mainAlert');
+        showToast((await safeJson(res)).msg, 'success');
         loadNetworkFiles();
-    } catch (e) { showMessage(e.message, 'error', 'mainAlert'); }
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
 /* =======================
@@ -1549,7 +1709,7 @@ async function loadUsers() {
                 </div>`).join('');
         }
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -1561,9 +1721,9 @@ async function setTrustedUploader(username, value) {
             body: JSON.stringify({ trusted_uploader: value })
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed');
-        showMessage(`${username}: Trusted uploader ${value ? 'enabled' : 'disabled'}`, 'success', 'mainAlert');
+        showToast(`${username}: Trusted uploader ${value ? 'enabled' : 'disabled'}`, 'success');
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
         loadUsers(); // revert UI
     }
 }
@@ -1576,9 +1736,9 @@ async function setAutoShare(username, value) {
             body: JSON.stringify({ auto_share: value })
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed');
-        showMessage(`${username}: Auto-share uploads ${value ? 'enabled' : 'disabled'}`, 'success', 'mainAlert');
+        showToast(`${username}: Auto-share uploads ${value ? 'enabled' : 'disabled'}`, 'success');
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
         loadUsers();
     }
 }
@@ -1606,7 +1766,7 @@ async function loadPendingUsers() {
                 </div>`).join('');
         }
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -1616,7 +1776,7 @@ async function addUser() {
     const role = document.getElementById('newRole').value;
 
     if (!username || !password) {
-        showMessage('Please fill in all fields', 'error', 'mainAlert');
+        showToast('Please fill in all fields', 'error');
         return;
     }
     try {
@@ -1627,13 +1787,13 @@ async function addUser() {
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to add user');
         const data = await safeJson(res);
-        showMessage(data.msg, 'success', 'mainAlert');
+        showToast(data.msg, 'success');
         document.getElementById('newUsername').value = '';
         document.getElementById('newPassword').value = '';
         document.getElementById('newRole').value = 'user';
         loadUsers();
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -1643,9 +1803,9 @@ async function approveUser(username) {
             method: 'POST', headers: { Authorization: 'Bearer ' + token }
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to approve');
-        showMessage((await safeJson(res)).msg, 'success', 'mainAlert');
+        showToast((await safeJson(res)).msg, 'success');
         loadPendingUsers();
-    } catch (e) { showMessage(e.message, 'error', 'mainAlert'); }
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
 async function rejectUser(username) {
@@ -1655,9 +1815,9 @@ async function rejectUser(username) {
             method: 'POST', headers: { Authorization: 'Bearer ' + token }
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to reject');
-        showMessage((await safeJson(res)).msg, 'success', 'mainAlert');
+        showToast((await safeJson(res)).msg, 'success');
         loadPendingUsers();
-    } catch (e) { showMessage(e.message, 'error', 'mainAlert'); }
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
 async function removeUser(username) {
@@ -1667,9 +1827,9 @@ async function removeUser(username) {
             method: 'DELETE', headers: { Authorization: 'Bearer ' + token }
         });
         if (!res.ok) throw new Error((await safeJson(res)).msg || 'Failed to delete user');
-        showMessage((await safeJson(res)).msg, 'success', 'mainAlert');
+        showToast((await safeJson(res)).msg, 'success');
         loadUsers();
-    } catch (e) { showMessage(e.message, 'error', 'mainAlert'); }
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
 /* =======================
@@ -1754,13 +1914,13 @@ async function createTextFile() {
         const data = await safeJson(res);
         if (!res.ok) throw new Error(data.msg || 'Failed to create file');
 
-        showMessage(`Created ${data.filename}`, 'success', 'mainAlert');
+        showToast(`Created ${data.filename}`, 'success');
         await loadFiles(currentPath);
 
         // Open it in the editor immediately
         openEditor(data.filepath, data.filename);
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -1780,7 +1940,7 @@ async function openEditor(filepath, filename) {
         if (!res.ok) throw new Error(data.msg || 'Failed to load file');
         content = data.content;
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
         return;
     }
 
@@ -2076,12 +2236,12 @@ async function saveEditor(silent = false) {
             statusEl.textContent = 'Saved ✓';
             setTimeout(() => { if (statusEl) statusEl.textContent = 'Ready'; }, 2000);
         }
-        if (!silent) showMessage('Saved successfully', 'success', 'mainAlert');
+        if (!silent) showToast('Saved successfully', 'success');
         // Refresh file list in background
         loadFiles(currentPath);
     } catch (e) {
         if (statusEl) statusEl.textContent = 'Save failed!';
-        if (!silent) showMessage(e.message, 'error', 'mainAlert');
+        if (!silent) showToast(e.message, 'error');
     }
 }
 
@@ -2416,10 +2576,10 @@ async function onDrop(event) {
         });
         const data = await safeJson(res);
         if (!res.ok) throw new Error(data.msg || 'Move failed');
-        showMessage(data.msg, 'success', 'mainAlert');
+        showToast(data.msg, 'success');
         loadFiles(currentPath);
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }
 
@@ -2490,9 +2650,9 @@ async function executeMoveDialog(srcPath) {
         });
         const data = await safeJson(res);
         if (!res.ok) throw new Error(data.msg || 'Move failed');
-        showMessage(data.msg, 'success', 'mainAlert');
+        showToast(data.msg, 'success');
         loadFiles(currentPath);
     } catch (e) {
-        showMessage(e.message, 'error', 'mainAlert');
+        showToast(e.message, 'error');
     }
 }

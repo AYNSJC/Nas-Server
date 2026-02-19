@@ -2304,3 +2304,93 @@ if __name__ == "__main__":
     debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
     port       = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=debug_mode)
+
+
+# ──────────────────────────────────────────────────────────────────
+#  PINNED FOLDERS  (server-synced per user)
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/pinned", methods=["GET"])
+@jwt_required()
+def get_pinned():
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+    pinned = user.get("pinned_folders", [])
+    return jsonify({"pinned": pinned}), 200
+
+
+@app.route("/api/pinned", methods=["POST"])
+@jwt_required()
+def add_pinned():
+    username = get_jwt_identity()
+    data = request.get_json() or {}
+    path = data.get("path", "").strip()
+    name = data.get("name", path.split("/")[-1] if path else "Root").strip()
+    if not path:
+        return jsonify({"msg": "Path required"}), 400
+    user = user_manager.get_user(username)
+    pinned = user.get("pinned_folders", [])
+    if any(p["path"] == path for p in pinned):
+        return jsonify({"msg": "Already pinned"}), 409
+    pinned.append({"path": path, "name": name})
+    user_manager.users[username]["pinned_folders"] = pinned
+    user_manager.save_users()
+    return jsonify({"msg": "Pinned", "pinned": pinned}), 200
+
+
+@app.route("/api/pinned", methods=["DELETE"])
+@jwt_required()
+def remove_pinned():
+    username = get_jwt_identity()
+    data = request.get_json() or {}
+    path = data.get("path", "").strip()
+    user = user_manager.get_user(username)
+    pinned = [p for p in user.get("pinned_folders", []) if p["path"] != path]
+    user_manager.users[username]["pinned_folders"] = pinned
+    user_manager.save_users()
+    return jsonify({"msg": "Unpinned", "pinned": pinned}), 200
+
+
+# ──────────────────────────────────────────────────────────────────
+#  FAVORITES  (server-synced per user)
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/favorites", methods=["GET"])
+@jwt_required()
+def get_favorites():
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+    favs = user.get("favorites", [])
+    return jsonify({"favorites": favs}), 200
+
+
+@app.route("/api/favorites", methods=["POST"])
+@jwt_required()
+def add_favorite():
+    username = get_jwt_identity()
+    data = request.get_json() or {}
+    path = data.get("path", "").strip()
+    name = data.get("name", path.split("/")[-1] if path else "").strip()
+    if not path:
+        return jsonify({"msg": "Path required"}), 400
+    user = user_manager.get_user(username)
+    favs = user.get("favorites", [])
+    if any(f["path"] == path for f in favs):
+        return jsonify({"msg": "Already favorited"}), 409
+    favs.append({"path": path, "name": name})
+    user_manager.users[username]["favorites"] = favs
+    user_manager.save_users()
+    return jsonify({"msg": "Favorited", "favorites": favs}), 200
+
+
+@app.route("/api/favorites", methods=["DELETE"])
+@jwt_required()
+def remove_favorite():
+    username = get_jwt_identity()
+    data = request.get_json() or {}
+    path = data.get("path", "").strip()
+    user = user_manager.get_user(username)
+    favs = [f for f in user.get("favorites", []) if f["path"] != path]
+    user_manager.users[username]["favorites"] = favs
+    user_manager.save_users()
+    return jsonify({"msg": "Unfavorited", "favorites": favs}), 200
