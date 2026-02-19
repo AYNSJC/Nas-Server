@@ -57,6 +57,7 @@ PREVIEWABLE_TYPES = {
              'toml', 'ini', 'cfg', 'conf'},
     'docx': {'docx'},
     'xlsx': {'xlsx', 'xls'},
+    'video': {'mp4', 'webm', 'ogg', 'mov', 'mkv', 'avi', 'm4v'},
 }
 
 
@@ -1179,6 +1180,25 @@ def delete_folder():
     try:
         shutil.rmtree(target_dir)
         user_manager.update_storage_used(username)
+        # Remove folder and all files within it from shared cache
+        approved_folders = list(shared_manager.get_approved_folders())
+        for entry in approved_folders:
+            if entry["username"] == username and (
+                entry["folder_path"] == folder_path or
+                entry["folder_path"].startswith(folder_path + "/")
+            ):
+                shared_manager.remove_folder_share(entry["id"])
+        approved = list(shared_manager.get_approved())
+        for entry in approved:
+            if entry["username"] == username and (
+                entry["filepath"] == folder_path or
+                entry["filepath"].startswith(folder_path + "/")
+            ):
+                shared_manager.remove_share(entry["id"])
+        pending = list(shared_manager.get_pending())
+        for entry in pending:
+            if entry["username"] == username and entry["filepath"].startswith(folder_path + "/"):
+                shared_manager.reject_share(entry["id"])
         logger.info(f"Folder deleted: {username}/{folder_path}")
         return jsonify({"msg": "Folder deleted successfully"}), 200
     except Exception as e:
@@ -1230,8 +1250,49 @@ def preview_file(filepath):
     elif file_type == 'text':
         return send_file(file_path, mimetype='text/plain')
 
+    elif file_type == 'video':
+        mime = mimetypes.guess_type(file_path)[0] or 'video/mp4'
+        return _stream_video(file_path, mime)
+
     else:
         return jsonify({"msg": "Preview not available for this file type"}), 400
+
+
+def _stream_video(file_path, mime_type):
+    """Stream a video file with range request support for seeking."""
+    file_size = file_path.stat().st_size
+    range_header = request.headers.get('Range', None)
+
+    if range_header:
+        byte_start, byte_end = 0, None
+        match = re.match(r'bytes=(\d+)-(\d*)', range_header)
+        if match:
+            byte_start = int(match.group(1))
+            byte_end = int(match.group(2)) if match.group(2) else file_size - 1
+        byte_end = min(byte_end, file_size - 1)
+        length = byte_end - byte_start + 1
+
+        def generate():
+            with open(file_path, 'rb') as f:
+                f.seek(byte_start)
+                remaining = length
+                while remaining > 0:
+                    chunk = f.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        response = app.response_class(generate(), 206, mimetype=mime_type, direct_passthrough=True)
+        response.headers['Content-Range'] = f'bytes {byte_start}-{byte_end}/{file_size}'
+        response.headers['Accept-Ranges'] = 'bytes'
+        response.headers['Content-Length'] = length
+        return response
+    else:
+        response = send_file(file_path, mimetype=mime_type)
+        response.headers['Accept-Ranges'] = 'bytes'
+        response.headers['Content-Length'] = file_size
+        return response
 
 
 @app.route("/api/network/preview/<file_id>", methods=["GET"])
@@ -1283,6 +1344,10 @@ def preview_network_file(file_id):
 
     elif file_type == 'text':
         return send_file(file_path, mimetype='text/plain')
+
+    elif file_type == 'video':
+        mime = mimetypes.guess_type(file_path)[0] or 'video/mp4'
+        return _stream_video(file_path, mime)
 
     else:
         return jsonify({"msg": "Preview not available for this file type"}), 400
@@ -1373,6 +1438,15 @@ def delete_file(filepath):
     try:
         file_path.unlink()
         user_manager.update_storage_used(username)
+        # Remove from shared cache
+        approved = list(shared_manager.get_approved())
+        for entry in approved:
+            if entry["username"] == username and entry["filepath"] == filepath:
+                shared_manager.remove_share(entry["id"])
+        pending = list(shared_manager.get_pending())
+        for entry in pending:
+            if entry["username"] == username and entry["filepath"] == filepath:
+                shared_manager.reject_share(entry["id"])
         logger.info(f"File deleted: {username}/{filepath}")
         return jsonify({"msg": "File deleted"}), 200
     except Exception as e:
@@ -1403,6 +1477,13 @@ def bulk_delete_files():
             if file_path.exists() and file_path.is_file():
                 file_path.unlink()
                 deleted.append(filepath)
+                # Remove from shared cache
+                for entry in list(shared_manager.get_approved()):
+                    if entry["username"] == username and entry["filepath"] == filepath:
+                        shared_manager.remove_share(entry["id"])
+                for entry in list(shared_manager.get_pending()):
+                    if entry["username"] == username and entry["filepath"] == filepath:
+                        shared_manager.reject_share(entry["id"])
                 logger.info(f"Bulk delete: {username}/{filepath}")
             else:
                 errors.append(filepath)

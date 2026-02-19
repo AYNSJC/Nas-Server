@@ -678,10 +678,10 @@ async function loadFiles(path = '') {
                     </div>
                     <div class="item-actions">
                         <div class="kebab-wrap">
-                            <button class="btn-kebab" onclick="toggleMenu(event, 'menu-f-${escapeHtml(folderPath)}')" title="Options">
+                            <button class="btn-kebab" onclick="toggleMenu(event, '${pathToId('mf-'+folderPath)}')" title="Options">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
                             </button>
-                            <div class="kebab-menu" id="menu-f-${escapeHtml(folderPath)}">
+                            <div class="kebab-menu" id="${pathToId('mf-'+folderPath)}">
                                 ${!folder.is_shared ? `<button class="kebab-item" onclick="requestFolderShare('${escapeHtml(folderPath)}'); closeAllMenus()">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
                                     Share</button>` : ''}
@@ -727,10 +727,10 @@ async function loadFiles(path = '') {
                         </div>
                         <div class="item-actions">
                             <div class="kebab-wrap">
-                                <button class="btn-kebab" onclick="toggleMenu(event, 'menu-${escapeHtml(filePath)}')" title="Options">
+                                <button class="btn-kebab" onclick="toggleMenu(event, '${pathToId('mf-'+filePath)}')" title="Options">
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
                                 </button>
-                                <div class="kebab-menu" id="menu-${escapeHtml(filePath)}">
+                                <div class="kebab-menu" id="${pathToId('mf-'+filePath)}">
                                     ${canEdit ? `<button class="kebab-item kebab-item-edit" onclick="openEditor('${escapeHtml(filePath)}', '${escapeHtml(file.name)}'); closeAllMenus()">
                                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                                         Edit</button>` : ''}
@@ -794,6 +794,7 @@ function getFileIcon(type) {
         'text': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><line x1="10" y1="9" x2="8" y2="9"></line></svg>',
         'docx': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>',
         'xlsx': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>',
+        'video': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>',
         'other': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>'
     };
     return icons[type] || icons['other'];
@@ -989,16 +990,20 @@ function previewFile(filepath, index = -1) {
 
     if (file && file.type === 'docx') {
         previewUrl = `/api/preview/docx/${encodeURIComponent(filepath)}?token=${token}`;
+        openPreviewModal(previewUrl, file ? file.name : filepath.split('/').pop(), index, allFiles.length, 'iframe');
     } else if (file && file.type === 'xlsx') {
         previewUrl = `/api/preview/xlsx/${encodeURIComponent(filepath)}?token=${token}`;
+        openPreviewModal(previewUrl, file ? file.name : filepath.split('/').pop(), index, allFiles.length, 'iframe');
+    } else if (file && file.type === 'video') {
+        previewUrl = `/api/preview/${encodeURIComponent(filepath)}?token=${token}`;
+        openPreviewModal(previewUrl, file ? file.name : filepath.split('/').pop(), index, allFiles.length, 'video');
     } else {
         previewUrl = `/api/preview/${encodeURIComponent(filepath)}?token=${token}`;
+        openPreviewModal(previewUrl, file ? file.name : filepath.split('/').pop(), index, allFiles.length, 'iframe');
     }
-
-    openPreviewModal(previewUrl, file ? file.name : filepath.split('/').pop(), index, allFiles.length);
 }
 
-function openPreviewModal(previewUrl, filename, index, total) {
+function openPreviewModal(previewUrl, filename, index, total, mode = 'iframe') {
     // Remove existing
     const existing = document.getElementById('previewModal');
     if (existing) existing.remove();
@@ -1016,6 +1021,40 @@ function openPreviewModal(previewUrl, filename, index, total) {
     const hasPrev = index > 0;
     const hasNext = index < total - 1;
 
+    let mediaContent;
+    if (mode === 'video') {
+        mediaContent = `
+            <div class="video-preview-wrap">
+                <video id="previewVideo" class="preview-video" controls autoplay preload="metadata"
+                       style="max-width:100%;max-height:70vh;background:#000;outline:none;">
+                    <source src="${previewUrl}">
+                    Your browser does not support the video tag.
+                </video>
+                <div class="video-controls-bar">
+                    <div class="video-controls-left">
+                        <label class="video-ctrl-label">Speed:</label>
+                        <select class="video-speed-select" onchange="setVideoSpeed(this.value)">
+                            <option value="0.25">0.25×</option>
+                            <option value="0.5">0.5×</option>
+                            <option value="0.75">0.75×</option>
+                            <option value="1" selected>1×</option>
+                            <option value="1.25">1.25×</option>
+                            <option value="1.5">1.5×</option>
+                            <option value="1.75">1.75×</option>
+                            <option value="2">2×</option>
+                        </select>
+                    </div>
+                    <div class="video-controls-right">
+                        <label class="video-ctrl-label">Quality:</label>
+                        <span class="video-quality-info" id="videoQualityInfo">Auto</span>
+                        <button class="btn btn-text" style="font-size:12px;" onclick="toggleVideoFullscreen()">⛶ Fullscreen</button>
+                    </div>
+                </div>
+            </div>`;
+    } else {
+        mediaContent = `<iframe src="${previewUrl}" class="preview-frame" allowfullscreen></iframe>`;
+    }
+
     content.innerHTML = `
         <div class="preview-header">
             <div class="preview-nav">
@@ -1025,11 +1064,45 @@ function openPreviewModal(previewUrl, filename, index, total) {
             </div>
             <button class="preview-close-inline" onclick="document.getElementById('previewModal').remove()">×</button>
         </div>
-        <iframe src="${previewUrl}" class="preview-frame" allowfullscreen></iframe>
+        ${mediaContent}
     `;
 
     modal.appendChild(content);
     document.body.appendChild(modal);
+
+    // Update video quality info after metadata loads
+    if (mode === 'video') {
+        const vid = document.getElementById('previewVideo');
+        if (vid) {
+            vid.addEventListener('loadedmetadata', () => {
+                const qi = document.getElementById('videoQualityInfo');
+                if (qi) qi.textContent = `${vid.videoWidth}×${vid.videoHeight}`;
+            });
+            // Restore saved speed
+            const savedSpeed = parseFloat(localStorage.getItem('videoSpeed') || '1');
+            vid.playbackRate = savedSpeed;
+            const sel = content.querySelector('.video-speed-select');
+            if (sel) sel.value = String(savedSpeed);
+        }
+    }
+}
+
+function setVideoSpeed(speed) {
+    const vid = document.getElementById('previewVideo');
+    if (vid) {
+        vid.playbackRate = parseFloat(speed);
+        localStorage.setItem('videoSpeed', speed);
+    }
+}
+
+function toggleVideoFullscreen() {
+    const vid = document.getElementById('previewVideo');
+    if (!vid) return;
+    if (document.fullscreenElement) {
+        document.exitFullscreen();
+    } else {
+        vid.requestFullscreen && vid.requestFullscreen();
+    }
 }
 
 function navigatePreview(direction) {
@@ -1260,7 +1333,7 @@ async function loadNetworkFiles() {
                                 </div>
                             </div>
                             <div class="item-actions">
-                                ${canPreview ? `<button class="btn btn-text" onclick="previewNetworkFile('${escapeHtml(file.id)}')">Preview</button>` : ''}
+                                ${canPreview ? `<button class="btn btn-text" onclick="previewNetworkFile('${escapeHtml(file.id)}', '${escapeHtml(file.file_type)}')">Preview</button>` : ''}
                                 <button class="btn btn-text" onclick="downloadNetworkFile('${escapeHtml(file.id)}')">Download</button>
                                 ${(isOwner || isAdmin) ? `<button class="btn btn-text btn-danger-text" onclick="removeNetworkShare('${escapeHtml(file.id)}')">Remove</button>` : ''}
                             </div>
@@ -1397,9 +1470,10 @@ async function deleteSharedItem(folderId, itemPath, itemType, itemName) {
     } catch (e) { showMessage(e.message, 'error', 'mainAlert'); }
 }
 
-function previewNetworkFile(fileId) {
+function previewNetworkFile(fileId, fileType) {
     const previewUrl = `/api/network/preview/${encodeURIComponent(fileId)}?token=${token}`;
-    openPreviewModal(previewUrl, fileId, -1, 0);
+    const mode = fileType === 'video' ? 'video' : 'iframe';
+    openPreviewModal(previewUrl, fileId, -1, 0, mode);
 }
 
 function downloadNetworkFile(fileId) {
@@ -1595,6 +1669,16 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// Generate a safe DOM id from an arbitrary path string (no slashes, quotes, etc.)
+function pathToId(path) {
+    // Replace non-alphanumeric chars with underscores, keep it unique via simple hash
+    let hash = 0;
+    for (let i = 0; i < path.length; i++) {
+        hash = (Math.imul(31, hash) + path.charCodeAt(i)) | 0;
+    }
+    return 'p' + Math.abs(hash).toString(36) + '_' + path.replace(/[^a-zA-Z0-9]/g, '_');
+}
+
 function formatDate(timestamp) {
     const date = new Date(timestamp * 1000);
     const now = new Date();
@@ -1779,6 +1863,13 @@ async function openEditor(filepath, filename) {
                         </button>
                         <button class="editor-tool" onclick="editorZoomReset()" title="Reset font size" style="font-size:10px;width:auto;padding:0 6px;">1:1</button>
                     </div>
+                    <div class="editor-toolbar-sep"></div>
+                    <select class="editor-font-select" id="editorFontFamily" title="Font family" onchange="applyEditorFont(this.value)">
+                        <option value="monospace">Mono</option>
+                        <option value="'Segoe UI',Arial,sans-serif">Sans-serif</option>
+                        <option value="Georgia,serif">Serif</option>
+                        <option value="'Courier New',monospace">Courier</option>
+                    </select>
                     <span class="editor-word-count" id="editorWordCount">0 words</span>
                 </div>
             </div>` : `
@@ -1794,6 +1885,13 @@ async function openEditor(filepath, filename) {
                         </button>
                         <button class="editor-tool" onclick="editorZoomReset()" title="Reset font size" style="font-size:10px;width:auto;padding:0 6px;">1:1</button>
                     </div>
+                    <div class="editor-toolbar-sep"></div>
+                    <select class="editor-font-select" id="editorFontFamily" title="Font family" onchange="applyEditorFont(this.value)">
+                        <option value="monospace">Mono</option>
+                        <option value="'Segoe UI',Arial,sans-serif">Sans-serif</option>
+                        <option value="Georgia,serif">Serif</option>
+                        <option value="'Courier New',monospace">Courier</option>
+                    </select>
                     <span class="editor-word-count" id="editorWordCount">0 words</span>
                 </div>
             </div>`}
@@ -1849,8 +1947,9 @@ async function openEditor(filepath, filename) {
     textarea.focus();
     textarea.setSelectionRange(0, 0);
 
-    // Apply saved font size
+    // Apply saved font size and family
     applyEditorFontSize();
+    applyEditorFont();
 }
 
 function closeEditor() {
@@ -2152,10 +2251,11 @@ function mdInsertTable() {
 }
 
 /* =====================================================
-   EDITOR FONT ZOOM
+   EDITOR FONT ZOOM & FAMILY
    ===================================================== */
 
 let editorFontSize = parseInt(localStorage.getItem('editorFontSize') || '14');
+let editorFontFamily = localStorage.getItem('editorFontFamily') || 'monospace';
 
 function applyEditorFontSize() {
     const ta = document.getElementById('editorTextarea');
@@ -2163,6 +2263,15 @@ function applyEditorFontSize() {
     const display = document.getElementById('editorFontSizeDisplay');
     if (display) display.textContent = editorFontSize + 'px';
     localStorage.setItem('editorFontSize', editorFontSize);
+}
+
+function applyEditorFont(family) {
+    editorFontFamily = family || editorFontFamily;
+    const ta = document.getElementById('editorTextarea');
+    if (ta) ta.style.fontFamily = editorFontFamily;
+    const sel = document.getElementById('editorFontFamily');
+    if (sel) sel.value = editorFontFamily;
+    localStorage.setItem('editorFontFamily', editorFontFamily);
 }
 
 function editorZoomIn() {

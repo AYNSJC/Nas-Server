@@ -853,3 +853,91 @@ input::placeholder { color: var(--text-tertiary); }
     min-width: 34px; text-align: center;
     user-select: none;
 }
+
+/* =========================================================
+   VIDEO PREVIEW PLAYER
+   ========================================================= */
+
+.video-preview-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    background: #000;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.preview-video {
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    object-fit: contain;
+    background: #000;
+    outline: none;
+}
+
+.video-controls-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 8px 16px;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.video-controls-left,
+.video-controls-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.video-ctrl-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.video-speed-select {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.video-quality-info {
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 8px;
+}
+
+/* =========================================================
+   EDITOR FONT FAMILY SELECTOR
+   ========================================================= */
+
+.editor-font-select {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px 6px;
+    font-size: 12px;
+    color: var(--text-primary);
+    cursor: pointer;
+    height: 26px;
+}
+
+:root[data-theme="dark"] .editor-font-select {
+    background: #2a2b35;
+    border-color: #313244;
+}
