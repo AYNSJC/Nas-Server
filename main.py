@@ -2441,7 +2441,7 @@ import threading as _threading
 
 MUSIC_DIR = BASE_DIR / "tracks"
 MUSIC_DIR.mkdir(exist_ok=True)
-MUSIC_EXTENSIONS = {'mp3', 'flac', 'wav', 'ogg', 'm4a', 'aac', 'opus', 'wma'}
+MUSIC_EXTENSIONS = {'mp3', 'flac', 'wav', 'ogg', 'm4a', 'aac', 'opus', 'wma', 'webm'}
 _dl_status = {}   # download_id -> {status, name, error, filename}
 
 
