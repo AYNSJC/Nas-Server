@@ -76,6 +76,12 @@
                     <path d="M30 35h40v8H30zm0 15h30v8H30zm0 15h25v8H30z" fill="white"/>
                 </svg>
             </div>
+            <!-- Theme toggle on login screen -->
+            <button class="btn btn-text auth-theme-toggle" onclick="toggleTheme()" title="Toggle theme" style="position:absolute;top:16px;right:16px;">
+                <svg id="authThemeIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                </svg>
+            </button>
             <div id="alert" class="alert"></div>
 
             <div id="loginView">
@@ -205,6 +211,13 @@
                         <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
                     </svg>
                     Shared with me
+                </a>
+                <a href="#" class="nav-item nav-item-music" id="musicNavItem" onclick="enterMusicMode(); return false;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+                    </svg>
+                    Music Player
+                    <span class="music-nav-badge" id="musicNavBadge" style="display:none">▶</span>
                 </a>
             </nav>
 
@@ -393,6 +406,12 @@
                 <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
         </button>
+        <button class="mobile-nav-btn" id="mobileMusicBtn" onclick="enterMusicMode()">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+            </svg>
+            Music
+        </button>
         <button class="mobile-nav-btn" id="mobileSearchBtn" onclick="loadFiles(); updateMobileNav('files')">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
@@ -409,6 +428,276 @@
             More
         </button>
     </nav>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         MUSIC PLAYER — full-screen overlay
+    ═══════════════════════════════════════════════════════════ -->
+    <div id="musicOverlay" class="music-overlay" style="display:none;">
+
+        <!-- Top bar -->
+        <div class="mp-topbar">
+            <button class="mp-back-btn" onclick="exitMusicMode()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+                Back to Files
+            </button>
+            <div class="mp-topbar-title">Music Player</div>
+            <div class="mp-topbar-right">
+                <button class="mp-icon-btn" id="mpLyricsBtn" onclick="mpToggleLyrics()" title="Lyrics">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                </button>
+                <button class="mp-icon-btn" onclick="mpScanTracks()" title="Refresh library (picks up files added to /tracks/ folder)">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                </button>
+                <button class="mp-icon-btn" id="mpAddBtn" onclick="openMusicAddPanel()" title="Add music">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Body: sidebar + main -->
+        <div class="mp-body">
+
+            <!-- Left sidebar: search + tabs + track list -->
+            <div class="mp-sidebar">
+                <div class="mp-search-row">
+                    <div class="mp-search-wrap">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <input id="mpSearch" class="mp-search" placeholder="Search…" oninput="mpFilterTracks()">
+                    </div>
+                    <select class="mp-sort-select" id="mpSort" onchange="mpFilterTracks()">
+                        <option value="name">Name</option>
+                        <option value="recent">Recent</option>
+                        <option value="fav">Fav first</option>
+                    </select>
+                </div>
+
+                <div class="mp-tabs">
+                    <button class="mp-tab active" id="mpTabAll"    onclick="mpSetTab('all')">All</button>
+                    <button class="mp-tab"        id="mpTabFav"    onclick="mpSetTab('fav')">Favorites</button>
+                    <button class="mp-tab"        id="mpTabPl"     onclick="mpSetTab('pl')">Playlists</button>
+                </div>
+
+                <!-- All / Favorites list -->
+                <div id="mpTrackList" class="mp-track-list"></div>
+
+                <!-- Playlists panel -->
+                <div id="mpPlaylistPanel" class="mp-playlist-panel" style="display:none;">
+                    <div class="mp-pl-header">
+                        <span>Playlists</span>
+                        <button onclick="mpCreatePlaylist()" class="mp-pl-new-btn">+ New</button>
+                    </div>
+                    <div id="mpPlaylists"></div>
+                    <div id="mpPlaylistTracks" class="mp-pl-tracks"></div>
+                </div>
+            </div>
+
+            <!-- Right main: artwork + now playing + controls -->
+            <div class="mp-main">
+                <!-- Artwork + visualizer -->
+                <div class="mp-artwork-wrap">
+                    <div class="mp-vinyl" id="mpVinyl">
+                        <div class="mp-vinyl-inner">
+                            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.6)" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                        </div>
+                    </div>
+                    <div class="mp-bars" id="mpBars">
+                        <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+                    </div>
+                </div>
+
+                <!-- Track info -->
+                <div class="mp-now-info">
+                    <div class="mp-now-title" id="mpNowTitle">No track selected</div>
+                    <div class="mp-now-sub"   id="mpNowSub">Pick a track from the list</div>
+                    <div class="mp-now-actions">
+                        <button class="mp-heart-btn" id="mpHeartBtn" onclick="mpToggleFav()" title="Favorite">
+                            <svg id="mpHeartIcon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                        </button>
+                        <button class="mp-menu-btn" id="mpTrackMenuBtn" onclick="mpOpenTrackMenu(event)">⋯</button>
+                    </div>
+                </div>
+
+                <!-- Progress -->
+                <div class="mp-progress-row">
+                    <span class="mp-time" id="mpCurrentTime">0:00</span>
+                    <div class="mp-progress-bar" id="mpProgressBar">
+                        <div class="mp-progress-bg"></div>
+                        <div class="mp-progress-fill" id="mpProgressFill"></div>
+                        <div class="mp-progress-thumb" id="mpProgressThumb"></div>
+                    </div>
+                    <span class="mp-time" id="mpDuration">0:00</span>
+                </div>
+
+                <!-- Main controls -->
+                <div class="mp-controls">
+                    <button class="mp-ctrl" id="mpShuffleBtn" onclick="mpToggleShuffle()" title="Shuffle">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/></svg>
+                    </button>
+                    <button class="mp-ctrl mp-ctrl-prev" onclick="mpPrev()" title="Previous">
+                        <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2"/></svg>
+                    </button>
+                    <button class="mp-ctrl mp-ctrl-skip" onclick="mpSeekBy(-10)" title="Rewind 10s">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/><text x="9" y="15" font-size="6" fill="currentColor" stroke="none" font-family="sans-serif" font-weight="bold">10</text></svg>
+                    </button>
+                    <button class="mp-ctrl mp-ctrl-play" id="mpPlayBtn" onclick="mpTogglePlay()">
+                        <svg id="mpPlayIcon" width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    </button>
+                    <button class="mp-ctrl mp-ctrl-skip" onclick="mpSeekBy(10)" title="Forward 10s">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-.49-3.5"/><text x="5.5" y="15" font-size="6" fill="currentColor" stroke="none" font-family="sans-serif" font-weight="bold">10</text></svg>
+                    </button>
+                    <button class="mp-ctrl mp-ctrl-next" onclick="mpNext()" title="Next">
+                        <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2"/></svg>
+                    </button>
+                    <button class="mp-ctrl" id="mpLoopBtn" onclick="mpCycleLoop()" title="Loop">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                    </button>
+                </div>
+
+                <!-- Volume + playlist add -->
+                <div class="mp-secondary">
+                    <div class="mp-vol-row">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                        <input type="range" class="mp-vol" id="mpVol" min="0" max="100" value="85" oninput="mpSetVol(this.value)">
+                        <span class="mp-vol-label" id="mpVolLabel">85%</span>
+                    </div>
+                    <button class="mp-add-pl-btn" onclick="mpAddToPlaylistMenu()" title="Add to playlist">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add to playlist
+                    </button>
+                </div>
+            </div>
+
+            <!-- Lyrics panel (slides in from right) -->
+            <div id="mpLyricsPanel" class="mp-lyrics-panel" style="display:none;">
+                <div class="mp-lyrics-topbar">
+                    <div class="mp-lyrics-topbar-left">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                        <span class="mp-lyrics-heading">Lyrics</span>
+                        <span class="mp-lyrics-sync-badge" id="mpLyricsSyncBadge" style="display:none">● LIVE</span>
+                    </div>
+                    <button class="mp-icon-btn" onclick="mpToggleLyrics()" title="Close lyrics">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
+                <div id="mpLyricsContent" class="mp-lyrics-content"></div>
+            </div>
+        </div>
+
+        <!-- Mini bar (visible when music is playing but you're on files tab) -->
+    </div>
+
+    <!-- Mini now-playing bar (shown when music plays outside music mode) -->
+    <div id="mpMiniBar" class="mp-mini-bar" style="display:none;">
+        <div class="mp-mini-info" onclick="enterMusicMode()">
+            <div class="mp-mini-spin" id="mpMiniSpin">♪</div>
+            <div>
+                <div class="mp-mini-title" id="mpMiniTitle">No track</div>
+                <div class="mp-mini-sub">Playing in background</div>
+            </div>
+        </div>
+        <div class="mp-mini-ctrls">
+            <button onclick="mpPrev()">⏮</button>
+            <button id="mpMiniPlay" onclick="mpTogglePlay()">▶</button>
+            <button onclick="mpNext()">⏭</button>
+        </div>
+    </div>
+
+    <!-- Add Music Panel (modal) -->
+    <div id="mpAddPanel" class="mp-add-panel-overlay" style="display:none;" onclick="if(event.target===this)closeMusicAddPanel()">
+        <div class="mp-add-panel">
+            <div class="mp-add-header">
+                <h3>Add Music</h3>
+                <button onclick="closeMusicAddPanel()">×</button>
+            </div>
+            <div class="mp-add-tabs">
+                <button class="mp-add-tab active" id="mpAddTabYT"      onclick="mpSwitchAddTab('yt')">YouTube URL</button>
+                <button class="mp-add-tab"         id="mpAddTabChannel" onclick="mpSwitchAddTab('channel')">Channel / Playlist</button>
+                <button class="mp-add-tab"         id="mpAddTabFile"   onclick="mpSwitchAddTab('file')">Upload File</button>
+            </div>
+
+            <!-- YouTube single video panel -->
+            <div id="mpAddYTPane">
+                <div class="form-group" style="margin-top:16px">
+                    <label>YouTube / YouTube Music URL</label>
+                    <input type="url" id="mpYTUrl" placeholder="https://www.youtube.com/watch?v=...">
+                </div>
+                <div class="form-group">
+                    <label>Track name <small style="color:var(--text-secondary)">(optional – uses video title if blank)</small></label>
+                    <input type="text" id="mpYTName" placeholder="e.g. My Song">
+                </div>
+                <div class="mp-format-row">
+                    <label class="mp-format-label">Format</label>
+                    <div class="mp-format-btns" id="mpYTFormatBtns">
+                        <button class="mp-fmt-btn active" data-fmt="mp3" onclick="mpSelectFmt('yt','mp3',this)">MP3</button>
+                        <button class="mp-fmt-btn" data-fmt="wav" onclick="mpSelectFmt('yt','wav',this)">WAV</button>
+                    </div>
+                    <label class="mp-thumb-toggle" title="Save album art as .webp">
+                        <input type="checkbox" id="mpYTThumb" checked>
+                        <span>Thumbnail (.webp)</span>
+                    </label>
+                </div>
+                <div id="mpYTStatus" class="mp-dl-status" style="display:none"></div>
+                <button class="btn btn-primary btn-block" id="mpYTBtn" onclick="mpDownloadYT()">
+                    Download
+                </button>
+            </div>
+
+            <!-- Channel / Playlist panel -->
+            <div id="mpAddChannelPane" style="display:none;">
+                <div class="form-group" style="margin-top:16px">
+                    <label>Channel or Playlist URL</label>
+                    <input type="url" id="mpChUrl" placeholder="https://www.youtube.com/@ChannelName  or  /playlist?list=...">
+                </div>
+                <div class="form-group">
+                    <label>Max videos <small style="color:var(--text-secondary)">(0 = download all)</small></label>
+                    <input type="number" id="mpChLimit" value="0" min="0" max="9999" placeholder="0">
+                </div>
+                <div class="mp-format-row">
+                    <label class="mp-format-label">Format</label>
+                    <div class="mp-format-btns" id="mpChFormatBtns">
+                        <button class="mp-fmt-btn active" data-fmt="mp3" onclick="mpSelectFmt('ch','mp3',this)">MP3</button>
+                        <button class="mp-fmt-btn" data-fmt="wav" onclick="mpSelectFmt('ch','wav',this)">WAV</button>
+                    </div>
+                    <label class="mp-thumb-toggle" title="Save album art as .webp">
+                        <input type="checkbox" id="mpChThumb" checked>
+                        <span>Thumbnails (.webp)</span>
+                    </label>
+                </div>
+                <div class="mp-channel-info">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    Downloads all videos from a channel's "Videos" tab or a full playlist. Long downloads run in the background.
+                </div>
+                <div id="mpChStatus" class="mp-dl-status" style="display:none"></div>
+                <button class="btn btn-primary btn-block" id="mpChBtn" onclick="mpDownloadChannel()">
+                    Download Channel / Playlist
+                </button>
+            </div>
+
+            <!-- File upload panel -->
+            <div id="mpAddFilePane" style="display:none;">
+                <div class="form-group" style="margin-top:16px">
+                    <label>Track name <small style="color:var(--text-secondary)">(optional)</small></label>
+                    <input type="text" id="mpUploadName" placeholder="Leave blank to use filename">
+                </div>
+                <div class="mp-drop-zone" id="mpDropZone" onclick="document.getElementById('mpFileIn').click()">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <p>Click or drag audio file here</p>
+                    <small>MP3, WAV, FLAC, OGG, M4A supported</small>
+                </div>
+                <input type="file" id="mpFileIn" accept=".mp3,.flac,.wav,.ogg,.m4a,.aac,.opus,.wma" style="display:none" onchange="mpUploadFile(this)">
+                <div id="mpUploadStatus" class="mp-dl-status" style="display:none"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Track context menu (rename, delete, add to pl) -->
+    <div id="mpTrackCtxMenu" class="mp-ctx-menu" style="display:none;"></div>
+
+    <!-- Add-to-playlist popup -->
+    <div id="mpAddToPLMenu" class="mp-ctx-menu" style="display:none;"></div>
+
+    <!-- Hidden audio element -->
+    <audio id="mpAudio" preload="metadata"></audio>
 
     <script src="/static/app.js"></script>
 </body>

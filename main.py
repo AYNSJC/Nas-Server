@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory, send_file
+from flask import Flask, request, jsonify, send_from_directory, send_file, make_response, abort
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_cors import CORS
 import bcrypt, json, os, shutil, logging, secrets, re, mimetypes
@@ -489,7 +489,9 @@ app = Flask(__name__, static_folder='static')
 app.config.update(
     JWT_SECRET_KEY=JWT_SECRET,
     JWT_ACCESS_TOKEN_EXPIRES=timedelta(hours=8),
-    MAX_CONTENT_LENGTH=None,
+    JWT_TOKEN_LOCATION=["headers", "query_string"],
+    JWT_QUERY_STRING_NAME="token",
+    MAX_CONTENT_LENGTH=2 * 1024 * 1024 * 1024,  # 2 GB
 )
 CORS(app)
 jwt = JWTManager(app)
@@ -2282,29 +2284,6 @@ def create_text_file():
         return jsonify({"msg": f"Failed to create file: {str(e)}"}), 500
 
 
-if __name__ == "__main__":
-    try:
-        import PIL
-        print("✓ Pillow installed")
-    except ImportError:
-        print("⚠️  Pillow not installed — run: pip install Pillow")
-
-    print("\n" + "=" * 60)
-    print("📦  NAS SYSTEM STARTING")
-    print("=" * 60)
-    print(f"  Storage : {STORAGE_DIR}")
-    print(f"  Static  : {STATIC_DIR}")
-    print(f"  Logs    : {LOG_DIR}")
-    print("\n  Default admin credentials:")
-    print("    Username : admin")
-    print("    Password : admin123")
-    print("\n  ⚠️  CHANGE THE ADMIN PASSWORD AFTER FIRST LOGIN!")
-    print("=" * 60 + "\n")
-
-    debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
-    port       = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=debug_mode)
-
 
 # ──────────────────────────────────────────────────────────────────
 #  PINNED FOLDERS  (server-synced per user)
@@ -2394,3 +2373,449 @@ def remove_favorite():
     user_manager.users[username]["favorites"] = favs
     user_manager.save_users()
     return jsonify({"msg": "Unfavorited", "favorites": favs}), 200
+
+
+# ──────────────────────────────────────────────────────────────────
+#  RENAME FILE/FOLDER
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/rename", methods=["POST"])
+@jwt_required()
+def rename_item():
+    username = get_jwt_identity()
+    data = request.get_json() or {}
+    filepath = validate_path(username, (data.get('filepath') or '').strip())
+    new_name = (data.get('new_name') or '').strip()
+
+    if not filepath or not new_name:
+        return jsonify({"msg": "filepath and new_name required"}), 400
+
+    user_dir = STORAGE_DIR / username
+    src_path = user_dir / filepath
+
+    try:
+        src_path.resolve().relative_to(user_dir.resolve())
+    except ValueError:
+        return jsonify({"msg": "Access denied"}), 403
+
+    if not src_path.exists():
+        return jsonify({"msg": "Not found"}), 404
+
+    parent = src_path.parent
+    # Sanitize new name
+    if src_path.is_file():
+        ext = src_path.suffix
+        name_no_ext = new_name if new_name.endswith(ext) else new_name
+        safe = secure_filename(name_no_ext)
+        if not safe:
+            return jsonify({"msg": "Invalid name"}), 400
+        dst_path = parent / safe
+    else:
+        safe = secure_filename(new_name)
+        if not safe:
+            return jsonify({"msg": "Invalid name"}), 400
+        dst_path = parent / safe
+
+    if dst_path.exists():
+        return jsonify({"msg": "A file with that name already exists"}), 409
+
+    try:
+        src_path.rename(dst_path)
+        user_manager.update_storage_used(username)
+        return jsonify({"msg": "Renamed", "new_path": str(dst_path.relative_to(user_dir))}), 200
+    except Exception as e:
+        return jsonify({"msg": str(e)}), 500
+
+
+# ──────────────────────────────────────────────────────────────────
+#  MUSIC PLAYER  (shared /tracks directory, JWT auth, no passwords)
+# ──────────────────────────────────────────────────────────────────
+
+try:
+    import yt_dlp as _yt_dlp
+    YT_DLP_AVAILABLE = True
+except ImportError:
+    YT_DLP_AVAILABLE = False
+
+import threading as _threading
+
+MUSIC_DIR = BASE_DIR / "tracks"
+MUSIC_DIR.mkdir(exist_ok=True)
+MUSIC_EXTENSIONS = {'mp3', 'flac', 'wav', 'ogg', 'm4a', 'aac', 'opus', 'wma'}
+_dl_status = {}   # download_id -> {status, name, error, filename}
+
+
+def _safe_music_path(filename):
+    path = (MUSIC_DIR / filename).resolve()
+    try:
+        path.relative_to(MUSIC_DIR.resolve())
+        return path
+    except ValueError:
+        return None
+
+
+def _music_size_fmt(b):
+    for u in ['B','KB','MB','GB']:
+        if b < 1024: return f"{b:.1f} {u}"
+        b /= 1024
+    return f"{b:.1f} TB"
+
+
+@app.route("/api/music/tracks", methods=["GET"])
+@jwt_required()
+def music_list_tracks():
+    try:
+        files = []
+        for f in MUSIC_DIR.iterdir():
+            if f.is_file() and f.suffix.lstrip('.').lower() in MUSIC_EXTENSIONS:
+                st = f.stat()
+                files.append({"name": f.name, "size": st.st_size,
+                               "size_fmt": _music_size_fmt(st.st_size),
+                               "modified": st.st_mtime})
+        files.sort(key=lambda x: x["name"].lower())
+        return jsonify({"tracks": files}), 200
+    except Exception as e:
+        return jsonify({"msg": str(e)}), 500
+
+
+@app.route("/api/music/stream/<path:filename>")
+@jwt_required()
+def music_stream(filename):
+    path = _safe_music_path(filename)
+    if not path or not path.exists():
+        return abort(404)
+    size = path.stat().st_size
+    mime = mimetypes.guess_type(str(path))[0] or "audio/mpeg"
+    rh = request.headers.get("Range")
+    if rh:
+        parts = rh.replace("bytes=", "").split("-")
+        start = int(parts[0]) if parts[0] else 0
+        end   = int(parts[1]) if len(parts) > 1 and parts[1] else size - 1
+        end   = min(end, size - 1)
+        length = end - start + 1
+        with open(path, "rb") as f:
+            f.seek(start); data = f.read(length)
+        rv = make_response(data, 206)
+        rv.headers.update({"Content-Range": f"bytes {start}-{end}/{size}",
+                            "Accept-Ranges": "bytes", "Content-Length": str(length),
+                            "Content-Type": mime})
+        return rv
+    with open(path, "rb") as f:
+        data = f.read()
+    rv = make_response(data)
+    rv.headers.update({"Accept-Ranges": "bytes", "Content-Length": str(size), "Content-Type": mime})
+    return rv
+
+
+@app.route("/api/music/upload", methods=["POST"])
+@jwt_required()
+def music_upload():
+    if "file" not in request.files:
+        return jsonify({"msg": "No file"}), 400
+    file = request.files["file"]
+    custom_name = request.form.get("name", "").strip()
+    _, ext = os.path.splitext(file.filename or "")
+    ext = ext.lower() or ".mp3"
+    if ext.lstrip('.') not in MUSIC_EXTENSIONS:
+        return jsonify({"msg": f"Unsupported format: {ext}"}), 400
+    base = custom_name if custom_name else os.path.splitext(file.filename or "track")[0]
+    safe = re.sub(r'[/\\:*?"<>|]', '_', base).strip() or "track"
+    fname = safe + ext
+    fpath = MUSIC_DIR / fname
+    c = 1
+    while fpath.exists():
+        fpath = MUSIC_DIR / f"{safe}_{c}{ext}"; c += 1
+    file.save(fpath)
+    logger.info(f"Music upload: {fname}")
+    return jsonify({"success": True, "filename": fpath.name}), 201
+
+
+@app.route("/api/music/youtube", methods=["POST"])
+@jwt_required()
+def music_youtube():
+    if not YT_DLP_AVAILABLE:
+        return jsonify({"msg": "yt-dlp not installed on server. Run: pip install yt-dlp"}), 500
+    data = request.get_json() or {}
+    url    = data.get("url", "").strip()
+    name   = data.get("name", "").strip()
+    fmt    = data.get("format", "mp3").strip().lower()   # "mp3" or "wav"
+    thumb  = bool(data.get("thumbnail", True))           # save .webp thumbnail
+    if fmt not in ("mp3", "wav"):
+        fmt = "mp3"
+    if not url:
+        return jsonify({"msg": "URL required"}), 400
+    did = secrets.token_urlsafe(8)
+    _dl_status[did] = {"status": "downloading", "name": name or url, "error": None, "filename": None, "count": 0}
+
+    def run():
+        tmpl = str(MUSIC_DIR / ((re.sub(r'[/\\:*?"<>|]', '_', name) + '.%(ext)s') if name else '%(title)s.%(ext)s'))
+        postproc = [{"key": "FFmpegExtractAudio", "preferredcodec": fmt,
+                     "preferredquality": "192" if fmt == "mp3" else "0"}]
+        if thumb:
+            postproc += [{"key": "EmbedThumbnail"}, {"key": "FFmpegMetadataPP"}]
+        opts = {
+            "format": "bestaudio/best", "outtmpl": tmpl,
+            "postprocessors": postproc,
+            "writethumbnail": thumb,
+            "noplaylist": True, "quiet": True, "no_warnings": True,
+        }
+        try:
+            with _yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = info.get('title', name or 'track')
+            _dl_status[did].update({"status": "done", "filename": title})
+            logger.info(f"YT download done: {url}")
+        except Exception as e:
+            _dl_status[did].update({"status": "error", "error": str(e)})
+            logger.error(f"YT download error: {e}")
+
+    _threading.Thread(target=run, daemon=True).start()
+    return jsonify({"success": True, "download_id": did}), 202
+
+
+@app.route("/api/music/channel", methods=["POST"])
+@jwt_required()
+def music_channel():
+    """Download all audio from a YouTube channel or playlist URL."""
+    if not YT_DLP_AVAILABLE:
+        return jsonify({"msg": "yt-dlp not installed on server. Run: pip install yt-dlp"}), 500
+    data  = request.get_json() or {}
+    url   = data.get("url", "").strip()
+    fmt   = data.get("format", "mp3").strip().lower()
+    thumb = bool(data.get("thumbnail", True))
+    limit = int(data.get("limit", 0))   # 0 = no limit
+    if fmt not in ("mp3", "wav"):
+        fmt = "mp3"
+    if not url:
+        return jsonify({"msg": "URL required"}), 400
+    did = secrets.token_urlsafe(8)
+    _dl_status[did] = {"status": "downloading", "name": url, "error": None,
+                        "filename": None, "count": 0, "total": None}
+
+    def progress_hook(d):
+        if d.get("status") == "finished":
+            _dl_status[did]["count"] = _dl_status[did].get("count", 0) + 1
+
+    def run():
+        tmpl = str(MUSIC_DIR / '%(title)s.%(ext)s')
+        postproc = [{"key": "FFmpegExtractAudio", "preferredcodec": fmt,
+                     "preferredquality": "192" if fmt == "mp3" else "0"}]
+        if thumb:
+            postproc += [{"key": "EmbedThumbnail"}, {"key": "FFmpegMetadataPP"}]
+        opts = {
+            "format": "bestaudio/best", "outtmpl": tmpl,
+            "postprocessors": postproc,
+            "writethumbnail": thumb,
+            "ignoreerrors": True,
+            "noplaylist": False,         # allow full playlists/channels
+            "quiet": True, "no_warnings": True,
+            "progress_hooks": [progress_hook],
+        }
+        if limit > 0:
+            opts["playlistend"] = limit
+        try:
+            with _yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                total = 0
+                if info and info.get("_type") == "playlist":
+                    total = len(info.get("entries") or [])
+            _dl_status[did].update({"status": "done", "total": total,
+                                     "filename": f"{_dl_status[did]['count']} tracks downloaded"})
+            logger.info(f"Channel/playlist download done: {url} ({total} tracks)")
+        except Exception as e:
+            _dl_status[did].update({"status": "error", "error": str(e)})
+            logger.error(f"Channel download error: {e}")
+
+    _threading.Thread(target=run, daemon=True).start()
+    return jsonify({"success": True, "download_id": did}), 202
+
+
+@app.route("/api/music/youtube/status/<did>", methods=["GET"])
+@jwt_required()
+def music_youtube_status(did):
+    s = _dl_status.get(did)
+    if not s:
+        return jsonify({"msg": "Unknown ID"}), 404
+    return jsonify(s), 200
+
+
+@app.route("/api/music/channel/status/<did>", methods=["GET"])
+@jwt_required()
+def music_channel_status(did):
+    s = _dl_status.get(did)
+    if not s:
+        return jsonify({"msg": "Unknown ID"}), 404
+    return jsonify(s), 200
+
+
+@app.route("/api/music/delete", methods=["DELETE"])
+@jwt_required()
+def music_delete():
+    data = request.get_json() or {}
+    fname = data.get("filename", "").strip()
+    path  = _safe_music_path(fname) if fname else None
+    if not path or not path.exists():
+        return jsonify({"msg": "Not found"}), 404
+    path.unlink()
+    return jsonify({"msg": "Deleted"}), 200
+
+
+@app.route("/api/music/rename", methods=["POST"])
+@jwt_required()
+def music_rename():
+    data = request.get_json() or {}
+    old  = data.get("old_name", "").strip()
+    new  = data.get("new_name", "").strip()
+    if not old or not new:
+        return jsonify({"msg": "Both names required"}), 400
+    old_path = _safe_music_path(old)
+    if not old_path or not old_path.exists():
+        return jsonify({"msg": "Not found"}), 404
+    _, ext = os.path.splitext(old)
+    if not os.path.splitext(new)[1]:
+        new += ext
+    safe_new = re.sub(r'[/\\:*?"<>|]', '_', new).strip()
+    new_path = _safe_music_path(safe_new)
+    if not new_path:
+        return jsonify({"msg": "Invalid name"}), 400
+    if new_path.exists():
+        return jsonify({"msg": "Name already exists"}), 409
+    old_path.rename(new_path)
+    return jsonify({"msg": "Renamed", "new_name": new_path.name}), 200
+
+
+@app.route("/api/music/prefs", methods=["GET"])
+@jwt_required()
+def music_get_prefs():
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+    return jsonify({
+        "playlists":  user.get("music_playlists", []),
+        "favorites":  user.get("music_favorites", []),
+    }), 200
+
+
+@app.route("/api/music/prefs", methods=["POST"])
+@jwt_required()
+def music_save_prefs():
+    username = get_jwt_identity()
+    data = request.get_json() or {}
+    if "playlists" in data:
+        user_manager.users[username]["music_playlists"] = data["playlists"]
+    if "favorites" in data:
+        user_manager.users[username]["music_favorites"] = data["favorites"]
+    user_manager.save_users()
+    return jsonify({"msg": "Saved"}), 200
+
+
+# ──────────────────────────────────────────────────────────────────
+#  ENTRY POINT  (must be last — after all routes are defined)
+# ──────────────────────────────────────────────────────────────────
+
+
+# ──────────────────────────────────────────────────────────────────
+#  MUSIC SCAN — refresh library (picks up files dropped in /tracks/)
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/music/scan", methods=["POST"])
+@jwt_required()
+def music_scan():
+    try:
+        files = []
+        for f in MUSIC_DIR.iterdir():
+            if f.is_file() and f.suffix.lstrip('.').lower() in MUSIC_EXTENSIONS:
+                st = f.stat()
+                files.append({"name": f.name, "size": st.st_size,
+                               "size_fmt": _music_size_fmt(st.st_size),
+                               "modified": st.st_mtime})
+        files.sort(key=lambda x: x["name"].lower())
+        return jsonify({"tracks": files, "count": len(files)}), 200
+    except Exception as e:
+        return jsonify({"msg": str(e)}), 500
+
+
+# ──────────────────────────────────────────────────────────────────
+#  LYRICS — proxy to lrclib.net (free, no API key needed)
+# ──────────────────────────────────────────────────────────────────
+
+import urllib.request as _urllib_req
+import urllib.parse   as _urllib_parse
+
+@app.route("/api/music/lyrics", methods=["GET"])
+@jwt_required()
+def music_lyrics():
+    track_name  = request.args.get("track_name",  "").strip()
+    artist_name = request.args.get("artist_name", "").strip()
+    if not track_name:
+        return jsonify({"found": False, "msg": "track_name required"}), 400
+    try:
+        params = {"track_name": track_name}
+        if artist_name:
+            params["artist_name"] = artist_name
+        url = "https://lrclib.net/api/search?" + _urllib_parse.urlencode(params)
+        req = _urllib_req.Request(url, headers={"User-Agent": "NAS-Music/1.0"})
+        with _urllib_req.urlopen(req, timeout=8) as r:
+            results = json.loads(r.read().decode())
+        if not results:
+            return jsonify({"found": False}), 200
+        best = results[0]
+        synced_raw = best.get("syncedLyrics", "") or ""
+        plain_raw  = best.get("plainLyrics",  "") or ""
+        if synced_raw:
+            return jsonify({"found": True, "synced": True,
+                            "lines": _parse_lrc(synced_raw), "lyrics": plain_raw,
+                            "title": best.get("trackName",""), "artist": best.get("artistName","")}), 200
+        elif plain_raw:
+            return jsonify({"found": True, "synced": False, "lines": [],
+                            "lyrics": plain_raw,
+                            "title": best.get("trackName",""), "artist": best.get("artistName","")}), 200
+        return jsonify({"found": False}), 200
+    except Exception as e:
+        logger.error(f"Lyrics error: {e}")
+        return jsonify({"found": False, "msg": str(e)}), 200
+
+
+def _parse_lrc(lrc_text):
+    import re as _re
+    lines = []
+    pat = _re.compile(r'\[(\d+):(\d+)\.(\d+)\](.*)')
+    for line in lrc_text.splitlines():
+        m = pat.match(line.strip())
+        if m:
+            mins, secs, cs, text = m.groups()
+            ms = (int(mins)*60 + int(secs))*1000 + int(cs.ljust(3,"0")[:3])
+            text = text.strip()
+            if text:
+                lines.append({"time_ms": ms, "text": text})
+    return lines
+
+
+if __name__ == "__main__":
+    try:
+        import PIL
+        print("✓ Pillow installed")
+    except ImportError:
+        print("⚠️  Pillow not installed — run: pip install Pillow")
+
+    try:
+        import yt_dlp
+        print("✓ yt-dlp installed")
+    except ImportError:
+        print("⚠️  yt-dlp not installed — run: pip install yt-dlp")
+
+    print("\n" + "=" * 60)
+    print("📦  NAS + MUSIC SYSTEM STARTING")
+    print("=" * 60)
+    print(f"  Storage : {STORAGE_DIR}")
+    print(f"  Music   : {MUSIC_DIR}")
+    print(f"  Static  : {STATIC_DIR}")
+    print(f"  Logs    : {LOG_DIR}")
+    print("\n  Default admin credentials:")
+    print("    Username : admin")
+    print("    Password : admin123")
+    print("\n  ⚠️  CHANGE THE ADMIN PASSWORD AFTER FIRST LOGIN!")
+    print("=" * 60 + "\n")
+
+    debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
+    port       = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=debug_mode)

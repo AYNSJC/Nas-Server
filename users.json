@@ -4,7 +4,9 @@
     "role": "admin",
     "status": "approved",
     "created_at": "2026-02-07T14:40:14.510808",
-    "storage_used": 0
+    "storage_used": 0,
+    "music_playlists": [],
+    "music_favorites": []
   },
   "DummyUser": {
     "password_hash": "$2b$12$oQXOthqtAYWOCsXXaHT4.OvyOPpduvsZF4IFDEEcGdno5jUqnFAmi",
