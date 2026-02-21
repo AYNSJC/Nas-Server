@@ -2571,6 +2571,11 @@ def music_youtube():
         if not artist or artist.lower() in ("various artists", ""):
             duration = info.get("duration")
             artist = _lookup_artist_musicbrainz(title, duration) or artist
+        # Last resort: use channel/uploader name (e.g. "Coke Studio", "T-Series")
+        if not artist:
+            artist = (info.get("uploader") or info.get("channel") or "").strip()
+            # Strip trailing " - Topic" suffix YouTube adds for auto-generated channels
+            artist = re.sub(r'\s*-\s*Topic\s*$', '', artist, flags=re.IGNORECASE).strip()
         # Clean title — strip "official video", "(lyrics)", etc.
         clean_title = re.sub(
             r'\s*[\(\[].*?(official|video|audio|lyrics|hd|4k|mv|music|feat\.?|ft\.?).*?[\)\]]',

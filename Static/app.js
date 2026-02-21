@@ -2784,6 +2784,10 @@ function enterMusicMode() {
     document.body.classList.remove('mp-mini-active');
     // Refresh tracks
     mpLoadTracks().then(() => mpRenderAll());
+    // On mobile, default to "now playing" tab
+    if (window.innerWidth <= 768) {
+        mpMobileTab('now');
+    }
 }
 
 function exitMusicMode() {
@@ -2794,6 +2798,40 @@ function exitMusicMode() {
         document.getElementById('mpMiniBar').style.display = 'flex';
         document.body.classList.add('mp-mini-active');
         document.getElementById('mpMiniTitle').textContent = mp.currentTrack;
+    }
+}
+
+// ── Mobile tab switching ─────────────────────────────────────────────
+function mpMobileTab(tab) {
+    if (window.innerWidth > 768) return; // no-op on desktop
+    const sidebar = document.getElementById('mpSidebar');
+    const lyricsPanel = document.getElementById('mpLyricsPanel');
+    const mainEl = document.getElementById('mpMain');
+
+    // Deactivate all
+    sidebar?.classList.remove('mp-mob-active');
+    lyricsPanel?.classList.remove('mp-mob-active');
+    if (mainEl) mainEl.style.display = '';
+
+    document.querySelectorAll('.mp-mob-tab').forEach(b => b.classList.remove('active'));
+
+    if (tab === 'songs') {
+        sidebar?.classList.add('mp-mob-active');
+        if (mainEl) mainEl.style.display = 'none';
+        document.getElementById('mpMobTabSongs')?.classList.add('active');
+    } else if (tab === 'lyrics') {
+        lyricsPanel?.classList.add('mp-mob-active');
+        if (mainEl) mainEl.style.display = 'none';
+        document.getElementById('mpMobTabLyrics')?.classList.add('active');
+        // Auto-fetch lyrics if needed
+        if (mp.currentTrack && mp.currentTrack !== mpLyrics.loadedFor) {
+            mpFetchLyrics(mp.currentTrack);
+        } else if (mpLyrics.synced) {
+            mpStartLyricSync();
+        }
+    } else { // 'now'
+        if (mainEl) mainEl.style.display = '';
+        document.getElementById('mpMobTabNow')?.classList.add('active');
     }
 }
 
@@ -2906,11 +2944,35 @@ function mpRenderTrackList() {
     if (!el) return;
     const list = mpGetFilteredTracks();
     if (list.length === 0) {
-        el.innerHTML = `<div class="mp-empty">
-            <div class="mp-empty-icon">${mp.tab === 'fav' ? '♡' : '🎵'}</div>
-            <div>${mp.tab === 'fav' ? 'No liked songs yet' : 'No tracks found'}</div>
-            <div style="font-size:12px;margin-top:4px;opacity:.6">${mp.tab === 'fav' ? 'Heart a track to add it here' : 'Use + to add music'}</div>
-        </div>`;
+        if (mp.tab === 'fav') {
+            el.innerHTML = `<div class="mp-empty">
+                <div class="mp-empty-icon">♡</div>
+                <div>No liked songs yet</div>
+                <div style="font-size:12px;margin-top:4px;opacity:.6">Heart a track to add it here</div>
+            </div>`;
+        } else if (mp.tracks.filter(t => !/\.(webp)$/i.test(t.name)).length === 0) {
+            // Truly empty library — show graphic
+            el.innerHTML = `<div class="mp-library-empty">
+                <div class="mp-library-empty-graphic">
+                    <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M9 18V5l12-2v13"/>
+                        <circle cx="6" cy="18" r="3"/>
+                        <circle cx="18" cy="16" r="3"/>
+                    </svg>
+                </div>
+                <div class="mp-library-empty-title">Your library is empty</div>
+                <div class="mp-library-empty-sub">Add songs via YouTube link,<br>channel download, or file upload</div>
+                <button class="mp-library-empty-btn" onclick="openMusicAddPanel()">
+                    + Add Music
+                </button>
+            </div>`;
+        } else {
+            el.innerHTML = `<div class="mp-empty">
+                <div class="mp-empty-icon">🔍</div>
+                <div>No tracks found</div>
+                <div style="font-size:12px;margin-top:4px;opacity:.6">Try a different search</div>
+            </div>`;
+        }
         return;
     }
     el.innerHTML = list.map((t, i) => mpRenderTrackRow(t, i, 'all', null)).join('');
@@ -3038,27 +3100,47 @@ function mpToggleExpand() {
 }
 
 function mpRenderBtns() {
+    const playIconEl = document.getElementById('mpPlayIconSvg');
     const playIcon = document.getElementById('mpPlayIcon');
     const miniPlay = document.getElementById('mpMiniPlay');
-    if (!mpAudio.paused && mp.currentTrack) {
-        if (playIcon) playIcon.setAttribute('d', 'M6 19h4V5H6zm8-14v14h4V5z'); // pause
-        if (miniPlay) miniPlay.textContent = '⏸';
-    } else {
-        if (playIcon) playIcon.setAttribute('d', 'M5 3l14 9-14 9V3z'); // play
-        if (miniPlay) miniPlay.textContent = '▶';
+    const playing = !mpAudio.paused && mp.currentTrack;
+    if (playIcon) {
+        if (playing) {
+            // Pause icon
+            playIcon.setAttribute('points', '');
+            playIconEl.innerHTML = '<rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/>';
+        } else {
+            playIconEl.innerHTML = '<polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>';
+        }
     }
+    if (miniPlay) miniPlay.textContent = playing ? '⏸' : '▶';
+
+    // Vinyl spin
+    const vinyl = document.getElementById('mpVinyl');
+    if (vinyl) vinyl.classList.toggle('spinning', !!playing);
 
     const nav = document.getElementById('musicNavItem');
     const badge = document.getElementById('musicNavBadge');
-    if (nav && badge) badge.style.display = (mp.currentTrack && !mpAudio.paused) ? 'inline' : 'none';
+    if (nav && badge) badge.style.display = playing ? 'inline' : 'none';
 
-    // Shuffle & loop
+    // Shuffle
     const shuffleBtn = document.getElementById('mpShuffleBtn');
     if (shuffleBtn) shuffleBtn.classList.toggle('active', mp.shuffle);
+
+    // Loop — distinct icons for off/all/one
     const loopBtn = document.getElementById('mpLoopBtn');
     if (loopBtn) {
-        loopBtn.classList.toggle('active', mp.loop > 0);
-        loopBtn.title = ['Loop off','Loop all','Loop one'][mp.loop];
+        loopBtn.classList.remove('loop-all', 'loop-one');
+        if (mp.loop === 1) {
+            loopBtn.classList.add('active', 'loop-all');
+            loopBtn.title = 'Loop all';
+        } else if (mp.loop === 2) {
+            loopBtn.classList.add('active', 'loop-one');
+            loopBtn.title = 'Loop one';
+        } else {
+            loopBtn.classList.remove('active');
+            loopBtn.title = 'Loop off';
+        }
     }
 }
 
@@ -3073,10 +3155,24 @@ function mpRenderPlaylists() {
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
                 <div class="mp-pl-name">${escapeHtml(pl.name)}</div>
                 <div class="mp-pl-count">${pl.tracks.length}</div>
-                <button class="mp-pl-del" onclick="mpDeletePlaylist('${escapeHtml(pl.id)}',event)" title="Delete playlist">✕</button>
+                <div class="mp-pl-actions" onclick="event.stopPropagation()">
+                    <button class="mp-pl-edit" onclick="mpRenamePlaylist('${escapeHtml(pl.id)}')" title="Rename">✎</button>
+                    <button class="mp-pl-del" onclick="mpDeletePlaylist('${escapeHtml(pl.id)}',event)" title="Delete">✕</button>
+                </div>
             </div>`).join('');
     }
     if (mp.activePl) mpRenderPlaylistTracks();
+}
+
+function mpRenamePlaylist(id) {
+    const pl = mp.playlists.find(p => p.id === id);
+    if (!pl) return;
+    const newName = prompt('Rename playlist:', pl.name);
+    if (!newName || !newName.trim() || newName.trim() === pl.name) return;
+    pl.name = newName.trim();
+    mpSavePrefs();
+    mpRenderPlaylists();
+    showToast('Playlist renamed', 'success');
 }
 
 function mpRenderPlaylistTracks() {
@@ -3084,20 +3180,111 @@ function mpRenderPlaylistTracks() {
     if (!el) return;
     const pl = mp.playlists.find(p => p.id === mp.activePl);
     if (!pl) { el.innerHTML = ''; return; }
+
+    // Edit bar with controls
+    const editBar = `<div class="mp-pl-edit-bar">
+        <span class="mp-pl-edit-title">✎ ${escapeHtml(pl.name)}</span>
+        <button onclick="mpPlayPlaylist('${escapeHtml(pl.id)}')">▶ Play all</button>
+        <button onclick="mpPlAddSongs('${escapeHtml(pl.id)}')">+ Add songs</button>
+    </div>`;
+
     if (pl.tracks.length === 0) {
-        el.innerHTML = `<div class="mp-empty" style="padding:16px 8px"><div class="mp-empty-icon">🎵</div><div>Playlist is empty</div><div style="font-size:11px;opacity:.6;margin-top:4px">Right-click a track to add it</div></div>`;
+        el.innerHTML = editBar + `<div class="mp-empty" style="padding:16px 8px"><div class="mp-empty-icon">🎵</div><div>Playlist is empty</div><div style="font-size:11px;opacity:.6;margin-top:4px">Click "+ Add songs" or right-click a track</div></div>`;
         return;
     }
-    const header = `<div class="mp-pl-header" style="padding-top:8px">
-        <span style="color:var(--mp-sub)">${escapeHtml(pl.name)}</span>
-        <button onclick="mpPlayPlaylist('${escapeHtml(pl.id)}')" class="mp-pl-new-btn">▶ Play all</button>
-    </div>`;
-    // Build fake track objects for mpRenderTrackRow
+
     const rows = pl.tracks.map((tn, i) => {
-        const fakeTrack = { name: tn, size_fmt: '' };
-        return mpRenderTrackRow(fakeTrack, i, 'pl', pl.id);
+        const title = mpGuessTitle(tn);
+        const artist = mpGuessArtist(tn);
+        const isActive = tn === mp.currentTrack;
+        const hasThumb = mpTrackHasThumb(tn);
+        return `<div class="mp-track-item${isActive ? ' active' : ''}" draggable="true"
+            data-pl-track="${escapeHtml(tn)}" data-pl-idx="${i}"
+            ondragstart="mpPlDragStart(event,${i})"
+            ondragover="mpPlDragOver(event)"
+            ondrop="mpPlDrop(event,'${escapeHtml(pl.id)}')"
+            ondragend="mpPlDragEnd(event)"
+            onclick="mpPlayTrackFrom('${escapeHtml(tn)}','pl','${escapeHtml(pl.id)}')" >
+            <div class="mp-drag-handle" title="Drag to reorder">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+            </div>
+            <div class="mp-track-art">
+                ${hasThumb ? `<img src="${mpThumbUrl(tn)}" loading="lazy" onerror="this.style.display='none';this.nextSibling.style.display='flex'">` : ''}
+                <div class="mp-track-art-placeholder" style="${hasThumb ? 'display:none' : ''}">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                </div>
+                <div class="mp-track-art-overlay">${isActive ? '<span></span><span></span><span></span>' : '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>'}</div>
+            </div>
+            <div class="mp-track-info">
+                <div class="mp-track-name${isActive ? ' active' : ''}">${escapeHtml(title)}</div>
+                <div class="mp-track-sub">${artist ? escapeHtml(artist) : '<span style="opacity:.5">Unknown Artist</span>'}</div>
+            </div>
+            <button class="mp-pl-del" onclick="mpPlRemoveTrack('${escapeHtml(pl.id)}','${escapeHtml(tn)}',event)" title="Remove">✕</button>
+        </div>`;
     }).join('');
-    el.innerHTML = header + rows;
+
+    el.innerHTML = editBar + rows;
+}
+
+// Drag-to-reorder for playlists
+let _mpDragIdx = -1;
+function mpPlDragStart(e, idx) {
+    _mpDragIdx = idx;
+    e.currentTarget.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+}
+function mpPlDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+}
+function mpPlDrop(e, plId) {
+    e.preventDefault();
+    const target = e.currentTarget;
+    const toIdx = parseInt(target.dataset.plIdx, 10);
+    if (_mpDragIdx === -1 || _mpDragIdx === toIdx) return;
+    const pl = mp.playlists.find(p => p.id === plId);
+    if (!pl) return;
+    const moved = pl.tracks.splice(_mpDragIdx, 1)[0];
+    pl.tracks.splice(toIdx, 0, moved);
+    _mpDragIdx = -1;
+    mpSavePrefs();
+    mpRenderPlaylistTracks();
+}
+function mpPlDragEnd(e) {
+    e.currentTarget.classList.remove('dragging');
+    _mpDragIdx = -1;
+}
+
+function mpPlRemoveTrack(plId, trackName, event) {
+    event.stopPropagation();
+    const pl = mp.playlists.find(p => p.id === plId);
+    if (!pl) return;
+    pl.tracks = pl.tracks.filter(t => t !== trackName);
+    mpSavePrefs();
+    mpRenderPlaylistTracks();
+}
+
+function mpPlAddSongs(plId) {
+    // Show a modal/sheet with all tracks not already in playlist
+    const pl = mp.playlists.find(p => p.id === plId);
+    if (!pl) return;
+    const available = mp.tracks.filter(t => !/\.(webp)$/i.test(t.name) && !pl.tracks.includes(t.name));
+    if (!available.length) { showToast('All tracks already in playlist', 'info'); return; }
+
+    // Simple prompt-style: show list in a context menu approach
+    const menu = document.getElementById('mpAddToPLMenu');
+    if (!menu) return;
+    menu.innerHTML = `<div style="padding:6px 10px 4px;font-size:11px;font-weight:700;color:var(--mp-sub);text-transform:uppercase;letter-spacing:.5px">Add to "${escapeHtml(pl.name)}"</div>
+        <div class="mp-ctx-sep"></div>` +
+        available.slice(0, 30).map(t => `
+        <button class="mp-ctx-item" onclick="mpAddTrackToPl('${escapeHtml(t.name)}','${escapeHtml(plId)}')">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            ${escapeHtml(mpGuessTitle(t.name))}
+        </button>`).join('') +
+        (available.length > 30 ? `<div style="padding:6px 12px;font-size:11px;color:var(--mp-sub)">(${available.length - 30} more — use right-click on tracks)</div>` : '');
+
+    const btn = document.querySelector('.mp-pl-edit-bar button:last-child');
+    mpPositionMenu(menu, btn);
 }
 
 // ── Playback ──────────────────────────────────────────────────────────
@@ -3158,6 +3345,12 @@ function mpLoad(name) {
     mpRenderNowPlaying();
     mpRenderTrackList();
     mpRenderBtns();
+    // Auto-fetch lyrics for new track
+    if (name !== mpLyrics.loadedFor) {
+        mpStopLyricSync();
+        mpLyrics.loadedFor = null;
+        mpFetchLyrics(name);
+    }
 }
 
 function mpTogglePlay() {
@@ -3351,13 +3544,9 @@ function mpAddTrackToPl(trackName, plId) {
     showToast('Added to "' + pl.name + '"', 'success');
 }
 
+// mpRemoveFromPlaylist kept for compatibility
 function mpRemoveFromPlaylist(plId, trackName, event) {
-    event.stopPropagation();
-    const pl = mp.playlists.find(p => p.id === plId);
-    if (!pl) return;
-    pl.tracks = pl.tracks.filter(t => t !== trackName);
-    mpSavePrefs();
-    mpRenderPlaylistTracks();
+    mpPlRemoveTrack(plId, trackName, event);
 }
 
 // ── Track context menu ────────────────────────────────────────────────
@@ -3736,28 +3925,15 @@ const mpLyrics = {
     lines: [],       // [{time_ms, text}]
     plain: '',
     synced: false,
-    visible: false,
+    visible: true,   // always shown
     activeLine: -1,
     syncTimer: null,
     loadedFor: null, // track name lyrics are loaded for
 };
 
 function mpToggleLyrics() {
-    const panel = document.getElementById('mpLyricsPanel');
-    if (!panel) return;
-    mpLyrics.visible = !mpLyrics.visible;
-    panel.style.display = mpLyrics.visible ? 'flex' : 'none';
-    const btn = document.getElementById('mpLyricsBtn');
-    if (btn) btn.classList.toggle('active', mpLyrics.visible);
-    if (mpLyrics.visible) {
-        if (mp.currentTrack && mp.currentTrack !== mpLyrics.loadedFor) {
-            mpFetchLyrics(mp.currentTrack);
-        } else if (mpLyrics.synced) {
-            mpStartLyricSync();
-        }
-    } else {
-        mpStopLyricSync();
-    }
+    // No-op — lyrics panel is always visible; on mobile use the tab
+    if (window.innerWidth <= 768) mpMobileTab('lyrics');
 }
 
 async function mpFetchLyrics(filename) {
@@ -3785,9 +3961,7 @@ async function mpFetchLyrics(filename) {
                 <div class="mp-lyrics-nf-name">"${escapeHtml(title)}"</div>
                 ${artist ? `<div class="mp-lyrics-nf-artist">by ${escapeHtml(artist)}</div>` : ''}
                 <div class="mp-lyrics-nf-tip">
-                    Tip: rename files as<br>
-                    <code>Artist - Song Title.mp3</code><br>
-                    for better matching
+                    Rename files as <code>Artist - Song Title.mp3</code> for better matching
                 </div>
             </div>`;
             mpLyrics.synced = false; mpLyrics.lines = [];
@@ -3826,7 +4000,7 @@ async function mpFetchLyrics(filename) {
 
 function mpStartLyricSync() {
     mpStopLyricSync();
-    if (!mpLyrics.synced || !mpLyrics.lines.length || !mpLyrics.visible) return;
+    if (!mpLyrics.synced || !mpLyrics.lines.length) return;
     const badge = document.getElementById('mpLyricsSyncBadge');
     if (badge) badge.style.display = 'inline-flex';
     mpLyrics.syncTimer = setInterval(() => {
@@ -3859,16 +4033,12 @@ function mpStopLyricSync() {
 }
 
 // Hook into audio events for lyrics sync
-mpAudio.addEventListener('play',  () => { if (mpLyrics.visible && mpLyrics.synced) mpStartLyricSync(); });
+mpAudio.addEventListener('play',  () => { if (mpLyrics.synced) mpStartLyricSync(); });
 mpAudio.addEventListener('pause', () => mpStopLyricSync());
 mpAudio.addEventListener('seeked', () => { mpLyrics.activeLine = -1; });
 
-// Reload lyrics when track changes
+// Reload lyrics when track changes (already handled in mpLoad, but keep override for safety)
 const _origMpRenderNP = mpRenderNowPlaying;
 window.mpRenderNowPlaying = function() {
     _origMpRenderNP();
-    if (mpLyrics.visible && mp.currentTrack && mp.currentTrack !== mpLyrics.loadedFor) {
-        mpStopLyricSync();
-        mpFetchLyrics(mp.currentTrack);
-    }
 };
