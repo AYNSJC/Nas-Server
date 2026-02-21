@@ -2484,27 +2484,12 @@ def music_stream(filename):
     path = _safe_music_path(filename)
     if not path or not path.exists():
         return abort(404)
-    size = path.stat().st_size
     mime = mimetypes.guess_type(str(path))[0] or "audio/mpeg"
-    rh = request.headers.get("Range")
-    if rh:
-        parts = rh.replace("bytes=", "").split("-")
-        start = int(parts[0]) if parts[0] else 0
-        end   = int(parts[1]) if len(parts) > 1 and parts[1] else size - 1
-        end   = min(end, size - 1)
-        length = end - start + 1
-        with open(path, "rb") as f:
-            f.seek(start); data = f.read(length)
-        rv = make_response(data, 206)
-        rv.headers.update({"Content-Range": f"bytes {start}-{end}/{size}",
-                            "Accept-Ranges": "bytes", "Content-Length": str(length),
-                            "Content-Type": mime})
-        return rv
-    with open(path, "rb") as f:
-        data = f.read()
-    rv = make_response(data)
-    rv.headers.update({"Accept-Ranges": "bytes", "Content-Length": str(size), "Content-Type": mime})
-    return rv
+    # Use send_file with conditional=True — Flask handles Range requests,
+    # ETags and Last-Modified automatically → instant seek, zero delay
+    response = make_response(send_file(str(path), mimetype=mime, conditional=True))
+    response.headers["Accept-Ranges"] = "bytes"
+    return response
 
 
 @app.route("/api/music/upload", methods=["POST"])
@@ -2538,8 +2523,8 @@ def music_youtube():
     data = request.get_json() or {}
     url    = data.get("url", "").strip()
     name   = data.get("name", "").strip()
-    fmt    = data.get("format", "mp3").strip().lower()   # "mp3" or "wav"
-    thumb  = bool(data.get("thumbnail", True))           # save .webp thumbnail
+    fmt    = data.get("format", "mp3").strip().lower()
+    thumb  = bool(data.get("thumbnail", True))
     if fmt not in ("mp3", "wav"):
         fmt = "mp3"
     if not url:
@@ -2547,12 +2532,74 @@ def music_youtube():
     did = secrets.token_urlsafe(8)
     _dl_status[did] = {"status": "downloading", "name": name or url, "error": None, "filename": None, "count": 0}
 
+    def _lookup_artist_musicbrainz(title, duration_sec=None):
+        """Try MusicBrainz to find the actual artist for a track title."""
+        try:
+            q = _urllib_parse.urlencode({"query": f'recording:"{title}"', "fmt": "json", "limit": "3"})
+            req = _urllib_req.Request(
+                f"https://musicbrainz.org/ws/2/recording?{q}",
+                headers={"User-Agent": "NAS-MusicPlayer/1.0 (nas@localhost)"}
+            )
+            with _urllib_req.urlopen(req, timeout=5) as r:
+                mb = json.loads(r.read())
+            recordings = mb.get("recordings", [])
+            if not recordings:
+                return None
+            # If we have duration, pick the closest match
+            best = recordings[0]
+            if duration_sec:
+                for rec in recordings:
+                    rec_dur = rec.get("length", 0) / 1000
+                    if abs(rec_dur - duration_sec) < 10:
+                        best = rec
+                        break
+            artists = best.get("artist-credit", [])
+            if artists:
+                return artists[0].get("artist", {}).get("name")
+        except Exception:
+            pass
+        return None
+
+    def _build_filename(info, custom_name):
+        """Build a clean 'Artist - Title' filename from yt-dlp info dict."""
+        if custom_name:
+            return re.sub(r'[/\\:*?"<>|]', '_', custom_name).strip()
+        title   = (info.get("title") or "Unknown").strip()
+        # yt-dlp exposes artist from video description / music metadata
+        artist  = (info.get("artist") or info.get("creator") or "").strip()
+        # Fallback: try MusicBrainz lookup
+        if not artist or artist.lower() in ("various artists", ""):
+            duration = info.get("duration")
+            artist = _lookup_artist_musicbrainz(title, duration) or artist
+        # Clean title — strip "official video", "(lyrics)", etc.
+        clean_title = re.sub(
+            r'\s*[\(\[].*?(official|video|audio|lyrics|hd|4k|mv|music|feat\.?|ft\.?).*?[\)\]]',
+            '', title, flags=re.IGNORECASE
+        ).strip()
+        if artist:
+            return re.sub(r'[/\\:*?"<>|]', '_', f"{artist} - {clean_title}").strip()
+        return re.sub(r'[/\\:*?"<>|]', '_', clean_title).strip()
+
     def run():
-        tmpl = str(MUSIC_DIR / ((re.sub(r'[/\\:*?"<>|]', '_', name) + '.%(ext)s') if name else '%(title)s.%(ext)s'))
+        # First extract info without downloading to get metadata
+        probe_opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
+                      "skip_download": True, "writeinfojson": False}
+        try:
+            with _yt_dlp.YoutubeDL(probe_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            _dl_status[did].update({"status": "error", "error": str(e)})
+            return
+
+        fname_base = _build_filename(info, name)
+        tmpl = str(MUSIC_DIR / (fname_base + ".%(ext)s"))
+
         postproc = [{"key": "FFmpegExtractAudio", "preferredcodec": fmt,
                      "preferredquality": "192" if fmt == "mp3" else "0"}]
         if thumb:
-            postproc += [{"key": "EmbedThumbnail"}, {"key": "FFmpegMetadataPP"}]
+            postproc += [{"key": "FFmpegMetadata"}]
+            if fmt == "mp3":
+                postproc += [{"key": "EmbedThumbnail"}]
         opts = {
             "format": "bestaudio/best", "outtmpl": tmpl,
             "postprocessors": postproc,
@@ -2561,10 +2608,10 @@ def music_youtube():
         }
         try:
             with _yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                title = info.get('title', name or 'track')
-            _dl_status[did].update({"status": "done", "filename": title})
-            logger.info(f"YT download done: {url}")
+                ydl.download([url])
+            display = fname_base
+            _dl_status[did].update({"status": "done", "filename": display})
+            logger.info(f"YT download done: {url} -> {display}")
         except Exception as e:
             _dl_status[did].update({"status": "error", "error": str(e)})
             logger.error(f"YT download error: {e}")
@@ -2576,38 +2623,62 @@ def music_youtube():
 @app.route("/api/music/channel", methods=["POST"])
 @jwt_required()
 def music_channel():
-    """Download all audio from a YouTube channel or playlist URL."""
+    """Download all audio from a YouTube channel or playlist URL, then auto-create a playlist."""
     if not YT_DLP_AVAILABLE:
         return jsonify({"msg": "yt-dlp not installed on server. Run: pip install yt-dlp"}), 500
-    data  = request.get_json() or {}
-    url   = data.get("url", "").strip()
-    fmt   = data.get("format", "mp3").strip().lower()
-    thumb = bool(data.get("thumbnail", True))
-    limit = int(data.get("limit", 0))   # 0 = no limit
+    data       = request.get_json() or {}
+    url        = data.get("url", "").strip()
+    fmt        = data.get("format", "mp3").strip().lower()
+    thumb      = bool(data.get("thumbnail", True))
+    limit      = int(data.get("limit", 0))
+    pl_name    = data.get("playlist_name", "").strip()
+    username   = get_jwt_identity()
     if fmt not in ("mp3", "wav"):
         fmt = "mp3"
     if not url:
         return jsonify({"msg": "URL required"}), 400
+    # Support artist Releases tab: youtube.com/@Artist/releases → append /videos or keep as-is
+    # yt-dlp handles /releases tab natively; just pass through
+    # Normalize shorts channel URLs: /@artist → /@artist/videos for full discography if no tab specified
+    import urllib.parse as _up
+    _parsed = _up.urlparse(url)
+    _path = _parsed.path.rstrip('/')
+    # If it ends in /releases, /singles, /albums — keep as-is (yt-dlp understands them)
+    # If bare channel URL with no tab, add /videos to get all uploads
+    _tab_suffixes = ('/videos', '/releases', '/shorts', '/streams', '/playlists')
+    if (_path.startswith('/@') or '/channel/' in _path or '/c/' in _path) and \
+       not any(_path.endswith(s) for s in _tab_suffixes) and \
+       'list=' not in url:
+        url = url.rstrip('/') + '/videos'
     did = secrets.token_urlsafe(8)
     _dl_status[did] = {"status": "downloading", "name": url, "error": None,
-                        "filename": None, "count": 0, "total": None}
+                        "filename": None, "count": 0, "total": None, "playlist": None}
+
+    downloaded_files = []
 
     def progress_hook(d):
         if d.get("status") == "finished":
-            _dl_status[did]["count"] = _dl_status[did].get("count", 0) + 1
+            fpath = d.get("filename", "")
+            if fpath:
+                downloaded_files.append(os.path.basename(fpath))
+            _dl_status[did]["count"] = len(downloaded_files)
 
     def run():
-        tmpl = str(MUSIC_DIR / '%(title)s.%(ext)s')
+        tmpl = str(MUSIC_DIR / '%(artist)s - %(title)s.%(ext)s')
+        # Fallback template if no artist tag
         postproc = [{"key": "FFmpegExtractAudio", "preferredcodec": fmt,
                      "preferredquality": "192" if fmt == "mp3" else "0"}]
         if thumb:
-            postproc += [{"key": "EmbedThumbnail"}, {"key": "FFmpegMetadataPP"}]
+            postproc += [{"key": "FFmpegMetadata"}]
+            if fmt == "mp3":
+                postproc += [{"key": "EmbedThumbnail"}]
         opts = {
-            "format": "bestaudio/best", "outtmpl": tmpl,
+            "format": "bestaudio/best",
+            "outtmpl": tmpl,
             "postprocessors": postproc,
             "writethumbnail": thumb,
             "ignoreerrors": True,
-            "noplaylist": False,         # allow full playlists/channels
+            "noplaylist": False,
             "quiet": True, "no_warnings": True,
             "progress_hooks": [progress_hook],
         }
@@ -2616,12 +2687,52 @@ def music_channel():
         try:
             with _yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=True)
-                total = 0
-                if info and info.get("_type") == "playlist":
-                    total = len(info.get("entries") or [])
-            _dl_status[did].update({"status": "done", "total": total,
-                                     "filename": f"{_dl_status[did]['count']} tracks downloaded"})
-            logger.info(f"Channel/playlist download done: {url} ({total} tracks)")
+
+            # Resolve playlist name
+            auto_pl_name = pl_name
+            if not auto_pl_name and info:
+                auto_pl_name = (info.get("title") or info.get("uploader") or
+                                info.get("channel") or "Downloaded Playlist")
+
+            # Normalise filenames — FFmpegExtractAudio changes extension
+            ext = "." + fmt
+            final_tracks = []
+            for raw in downloaded_files:
+                # Strip old extension, add new one
+                base = re.sub(r'\.[^.]+$', '', raw)
+                candidate = base + ext
+                if (MUSIC_DIR / candidate).exists():
+                    final_tracks.append(candidate)
+                elif (MUSIC_DIR / raw).exists():
+                    final_tracks.append(raw)
+
+            # Auto-create or overwrite playlist in user prefs
+            if final_tracks and auto_pl_name:
+                user = user_manager.get_user(username)
+                playlists = user.get("music_playlists", [])
+                # Find existing playlist with same name → overwrite
+                existing = next((p for p in playlists if p["name"] == auto_pl_name), None)
+                if existing:
+                    existing["tracks"] = final_tracks
+                    new_pl = existing
+                else:
+                    new_pl = {
+                        "id": secrets.token_urlsafe(6),
+                        "name": auto_pl_name,
+                        "tracks": final_tracks,
+                    }
+                    playlists.append(new_pl)
+                user_manager.users[username]["music_playlists"] = playlists
+                user_manager.save_users()
+                _dl_status[did]["playlist"] = new_pl["name"]
+
+            count = len(final_tracks)
+            _dl_status[did].update({
+                "status": "done", "total": count,
+                "filename": f"{count} track(s) downloaded",
+                "playlist": _dl_status[did].get("playlist"),
+            })
+            logger.info(f"Channel download done: {url} ({count} tracks), playlist: {auto_pl_name}")
         except Exception as e:
             _dl_status[did].update({"status": "error", "error": str(e)})
             logger.error(f"Channel download error: {e}")
@@ -2732,6 +2843,97 @@ def music_scan():
         return jsonify({"tracks": files, "count": len(files)}), 200
     except Exception as e:
         return jsonify({"msg": str(e)}), 500
+
+
+# ──────────────────────────────────────────────────────────────────
+#  ENRICH — bulk artist lookup for existing tracks via MusicBrainz
+#  Renames "Song Title.mp3" → "Artist - Song Title.mp3"
+# ──────────────────────────────────────────────────────────────────
+
+_enrich_status = {}   # job_id -> {done, total, renamed, errors}
+
+def _mb_lookup(title, duration_sec=None):
+    """Query MusicBrainz for artist given a track title. Returns artist str or None."""
+    try:
+        q = _urllib_parse.urlencode({"query": f'recording:"{title}"', "fmt": "json", "limit": "5"})
+        req = _urllib_req.Request(
+            f"https://musicbrainz.org/ws/2/recording?{q}",
+            headers={"User-Agent": "NAS-MusicPlayer/1.0 (nas@localhost)"}
+        )
+        with _urllib_req.urlopen(req, timeout=6) as r:
+            mb = json.loads(r.read())
+        recordings = mb.get("recordings", [])
+        if not recordings:
+            return None
+        best = recordings[0]
+        if duration_sec:
+            for rec in recordings:
+                rec_dur = (rec.get("length") or 0) / 1000
+                if abs(rec_dur - duration_sec) < 8:
+                    best = rec; break
+        credits = best.get("artist-credit", [])
+        if credits:
+            return credits[0].get("artist", {}).get("name")
+    except Exception:
+        pass
+    return None
+
+@app.route("/api/music/enrich", methods=["POST"])
+@jwt_required()
+def music_enrich():
+    """Background job: find artist names for tracks that lack them."""
+    import time as _time
+    jid = secrets.token_urlsafe(6)
+    _enrich_status[jid] = {"done": 0, "total": 0, "renamed": [], "errors": [], "running": True}
+
+    def run():
+        # Find tracks without an artist (no " - " separator in basename)
+        candidates = []
+        for f in MUSIC_DIR.iterdir():
+            if f.is_file() and f.suffix.lstrip('.').lower() in MUSIC_EXTENSIONS:
+                stem = f.stem
+                if ' - ' not in stem:
+                    candidates.append(f)
+        _enrich_status[jid]["total"] = len(candidates)
+
+        for f in candidates:
+            stem = f.stem
+            # Strip common noise
+            clean = re.sub(
+                r'\s*[\(\[].*?(official|video|audio|lyrics|hd|4k|mv|music|feat\.?|ft\.?).*?[\)\]]',
+                '', stem, flags=re.IGNORECASE
+            ).strip()
+            artist = _mb_lookup(clean)
+            _enrich_status[jid]["done"] += 1
+            if not artist:
+                _enrich_status[jid]["errors"].append(stem)
+                continue
+            new_stem = re.sub(r'[/\\:*?"<>|]', '_', f"{artist} - {clean}").strip()
+            new_path = MUSIC_DIR / (new_stem + f.suffix)
+            # Don't overwrite existing file
+            if new_path.exists():
+                _enrich_status[jid]["errors"].append(stem)
+                continue
+            try:
+                f.rename(new_path)
+                _enrich_status[jid]["renamed"].append({"old": f.name, "new": new_path.name})
+            except Exception as ex:
+                _enrich_status[jid]["errors"].append(f"{stem}: {ex}")
+            _time.sleep(0.3)   # be polite to MusicBrainz API
+
+        _enrich_status[jid]["running"] = False
+
+    _threading.Thread(target=run, daemon=True).start()
+    return jsonify({"job_id": jid}), 202
+
+
+@app.route("/api/music/enrich/status/<jid>", methods=["GET"])
+@jwt_required()
+def music_enrich_status(jid):
+    s = _enrich_status.get(jid)
+    if not s:
+        return jsonify({"msg": "Unknown job"}), 404
+    return jsonify(s), 200
 
 
 # ──────────────────────────────────────────────────────────────────

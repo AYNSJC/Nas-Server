@@ -42,8 +42,9 @@ def build_opts(fmt: str, quality: str, save_thumb: bool, allow_playlist: bool, o
 
     if save_thumb:
         # Embeds thumbnail into MP3/WAV metadata AND saves a .webp sidecar
-        postprocessors.append({"key": "EmbedThumbnail"})
-        postprocessors.append({"key": "FFmpegMetadataPP"})
+        postprocessors.append({"key": "FFmpegMetadata"})
+        if fmt == "mp3":
+            postprocessors.append({"key": "EmbedThumbnail"})
 
     opts = {
         "format": "bestaudio/best",

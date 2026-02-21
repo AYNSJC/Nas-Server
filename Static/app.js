@@ -2722,18 +2722,19 @@ async function renameFileInline(filepath, currentName) {
 
 // ── State ──────────────────────────────────────────────────────────
 const mp = {
-    tracks: [],          // [{name, size, size_fmt, modified}]
-    playlists: [],       // [{id, name, tracks:[]}]
-    favorites: new Set(),// set of track names
+    tracks: [],
+    playlists: [],
+    favorites: new Set(),
     currentTrack: null,
     currentIndex: -1,
-    queue: [],           // ordered play queue (track names)
-    tab: 'all',          // 'all' | 'fav' | 'pl'
-    activePl: null,      // active playlist id
+    queue: [],
+    tab: 'all',      // 'all' | 'artist' | 'fav' | 'pl'
+    activePl: null,
     shuffle: false,
-    loop: 0,             // 0=off 1=all 2=one
+    loop: 0,
     isInMusicMode: false,
     dlPollTimer: null,
+    sidebarOpen: true,
 };
 
 const mpAudio = document.getElementById('mpAudio');
@@ -2801,11 +2802,27 @@ function mpSetTab(tab) {
     mp.tab = tab;
     mp.activePl = null;
     document.querySelectorAll('.mp-tab').forEach(t => t.classList.remove('active'));
-    document.getElementById('mpTab' + (tab === 'all' ? 'All' : tab === 'fav' ? 'Fav' : 'Pl')).classList.add('active');
-    document.getElementById('mpTrackList').style.display = tab === 'pl' ? 'none' : 'block';
-    document.getElementById('mpPlaylistPanel').style.display = tab === 'pl' ? 'flex' : 'none';
-    if (tab !== 'pl') mpRenderTrackList();
-    else mpRenderPlaylists();
+    const ids = {all:'All', artist:'Artist', fav:'Fav', pl:'Pl'};
+    document.getElementById('mpTab' + (ids[tab] || 'All'))?.classList.add('active');
+    const trackList = document.getElementById('mpTrackList');
+    const artistPanel = document.getElementById('mpArtistPanel');
+    const plPanel = document.getElementById('mpPlaylistPanel');
+    if (trackList) trackList.style.display  = (tab === 'pl' || tab === 'artist') ? 'none' : 'block';
+    if (artistPanel) artistPanel.style.display = tab === 'artist' ? 'block' : 'none';
+    if (plPanel) plPanel.style.display      = tab === 'pl' ? 'flex' : 'none';
+    if (tab === 'artist') mpRenderArtistPanel();
+    else if (tab === 'pl') mpRenderPlaylists();
+    else mpRenderTrackList();
+}
+
+function mpToggleSidebar() {
+    const sb = document.getElementById('mpSidebar');
+    if (!sb) return;
+    if (window.innerWidth <= 768) {
+        sb.classList.toggle('mp-open');
+    } else {
+        sb.classList.toggle('mp-collapsed');
+    }
 }
 
 // ── Filter / sort ────────────────────────────────────────────────────
@@ -2837,6 +2854,53 @@ function mpRenderAll() {
     mpRenderBtns();
 }
 
+function mpThumbUrl(trackName) {
+    // Look for matching .webp sidecar file
+    const base = trackName.replace(/\.(mp3|flac|wav|ogg|m4a|aac|opus|wma|webm)$/i, '');
+    return '/api/music/stream/' + encodeURIComponent(base + '.webp') + '?token=' + encodeURIComponent(token);
+}
+
+function mpTrackHasThumb(trackName) {
+    // Check if a webp exists in track list
+    const base = trackName.replace(/\.(mp3|flac|wav|ogg|m4a|aac|opus|wma|webm)$/i, '');
+    return mp.tracks.some(t => t.name === base + '.webp');
+}
+
+function mpRenderTrackRow(t, i, context, plId) {
+    const isActive = t.name === mp.currentTrack;
+    const isFav = mp.favorites.has(t.name);
+    const title = mpGuessTitle(t.name);
+    const artist = mpGuessArtist(t.name);
+    const hasThumb = mpTrackHasThumb(t.name);
+    const thumbUrl = hasThumb ? mpThumbUrl(t.name) : '';
+    const onClick = context === 'pl'
+        ? `mpPlayTrackFrom('${escapeHtml(t.name)}','pl','${escapeHtml(plId)}')`
+        : `mpPlayTrack('${escapeHtml(t.name)}')`;
+    return `<div class="mp-track-item${isActive ? ' active' : ''}" onclick="${onClick}">
+        <div class="mp-track-art">
+            ${hasThumb
+                ? `<img src="${thumbUrl}" loading="lazy" onerror="this.style.display='none';this.nextSibling.style.display='flex'">`
+                : ''}
+            <div class="mp-track-art-placeholder" style="${hasThumb ? 'display:none' : ''}">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            </div>
+            <div class="mp-track-art-overlay">
+                ${isActive
+                    ? '<span></span><span></span><span></span>'
+                    : `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>`}
+            </div>
+        </div>
+        <div class="mp-track-info">
+            <div class="mp-track-name${isActive ? ' active' : ''}">${escapeHtml(title)}</div>
+            <div class="mp-track-sub">${artist ? escapeHtml(artist) : '<span style="opacity:.5">Unknown Artist</span>'}</div>
+        </div>
+        <button class="mp-track-fav${isFav ? ' liked' : ''}" onclick="mpToggleFavTrack('${escapeHtml(t.name)}',event)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="${isFav ? '#f472b6' : 'none'}" stroke="${isFav ? '#f472b6' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        </button>
+        <button class="mp-track-more" onclick="mpOpenTrackCtx(event,'${escapeHtml(t.name)}')">⋯</button>
+    </div>`;
+}
+
 function mpRenderTrackList() {
     const el = document.getElementById('mpTrackList');
     if (!el) return;
@@ -2844,57 +2908,120 @@ function mpRenderTrackList() {
     if (list.length === 0) {
         el.innerHTML = `<div class="mp-empty">
             <div class="mp-empty-icon">${mp.tab === 'fav' ? '♡' : '🎵'}</div>
-            ${mp.tab === 'fav' ? 'No favorites yet.<br>Star tracks to add them here.' : 'No tracks found.<br>Add music using the + button.'}
+            <div>${mp.tab === 'fav' ? 'No liked songs yet' : 'No tracks found'}</div>
+            <div style="font-size:12px;margin-top:4px;opacity:.6">${mp.tab === 'fav' ? 'Heart a track to add it here' : 'Use + to add music'}</div>
         </div>`;
         return;
     }
-    el.innerHTML = list.map((t, i) => {
-        const isActive = t.name === mp.currentTrack;
-        const isFav = mp.favorites.has(t.name);
-        const cleanName = mpGuessTitle(t.name);
-        const artistName = mpGuessArtist(t.name);
-        return `<div class="mp-track-item${isActive ? ' active' : ''}" onclick="mpPlayTrack('${escapeHtml(t.name)}')">
-            <div class="mp-track-num">${i + 1}</div>
-            <div class="mp-track-playing-icon">
-                <span></span><span></span><span></span>
+    el.innerHTML = list.map((t, i) => mpRenderTrackRow(t, i, 'all', null)).join('');
+}
+
+function mpRenderArtistPanel() {
+    const el = document.getElementById('mpArtistPanel');
+    if (!el) return;
+    // Group by artist
+    const groups = {};
+    const sorted = [...mp.tracks]
+        .filter(t => !/\.(webp)$/i.test(t.name))
+        .sort((a,b) => a.name.localeCompare(b.name));
+    sorted.forEach(t => {
+        const artist = mpGuessArtist(t.name) || 'Unknown Artist';
+        if (!groups[artist]) groups[artist] = [];
+        groups[artist].push(t);
+    });
+    const artistNames = Object.keys(groups).sort((a,b) => a.localeCompare(b));
+    if (!artistNames.length) {
+        el.innerHTML = '<div class="mp-empty"><div class="mp-empty-icon">🎤</div><div>No artists found</div><div style="font-size:12px;margin-top:4px;opacity:.6">Click "Find Artists" to tag your library</div></div>';
+        return;
+    }
+    el.innerHTML = artistNames.map(artist => {
+        const tracks = groups[artist];
+        const initial = artist.charAt(0).toUpperCase();
+        // Try to find thumbnail from first track
+        const firstWithThumb = tracks.find(t => mpTrackHasThumb(t.name));
+        const thumbHtml = firstWithThumb
+            ? `<img src="${mpThumbUrl(firstWithThumb.name)}" loading="lazy" onerror="this.style.display='none'">`
+            : `<span>${initial}</span>`;
+        const tracksHtml = tracks.map((t, i) => mpRenderTrackRow(t, i, 'all', null)).join('');
+        const safeArtist = escapeHtml(artist).replace(/'/g, "\'");
+        return `<div class="mp-artist-section" id="mpArtist_${initial}_${tracks.length}">
+            <div class="mp-artist-row" onclick="mpToggleArtist(this)">
+                <div class="mp-artist-img">${thumbHtml}</div>
+                <div class="mp-artist-info">
+                    <div class="mp-artist-name">${escapeHtml(artist)}</div>
+                    <div class="mp-artist-count">${tracks.length} song${tracks.length !== 1 ? 's' : ''}</div>
+                </div>
+                <svg class="mp-artist-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
             </div>
-            <div class="mp-track-info">
-                <div class="mp-track-name">${escapeHtml(cleanName)}</div>
-                <div class="mp-track-size">${artistName ? escapeHtml(artistName) + " · " : ""}${t.size_fmt}</div>
-            </div>
-            <button class="mp-track-fav${isFav ? ' active' : ''}" onclick="mpToggleFavTrack('${escapeHtml(t.name)}',event)" title="${isFav ? 'Remove from favorites' : 'Add to favorites'}">
-                ${isFav ? '♥' : '♡'}
-            </button>
-            <button class="mp-track-more" onclick="mpOpenTrackCtx(event,'${escapeHtml(t.name)}')" title="More options">⋯</button>
+            <div class="mp-artist-tracks" style="display:none">${tracksHtml}</div>
         </div>`;
     }).join('');
 }
 
-function mpRenderNowPlaying() {
-    const titleEl = document.getElementById('mpNowTitle');
-    const subEl   = document.getElementById('mpNowSub');
-    const vinyl   = document.getElementById('mpVinyl');
-    const bars    = document.getElementById('mpBars');
-    const miniTitle = document.getElementById('mpMiniTitle');
-    const miniSpin  = document.getElementById('mpMiniSpin');
+function mpToggleArtist(rowEl) {
+    const section = rowEl.closest('.mp-artist-section');
+    const tracks = section.querySelector('.mp-artist-tracks');
+    const chevron = section.querySelector('.mp-artist-chevron');
+    const isOpen = tracks.style.display !== 'none';
+    tracks.style.display = isOpen ? 'none' : 'block';
+    chevron.style.transform = isOpen ? '' : 'rotate(90deg)';
+}
 
+function mpRenderNowPlaying() {
+    const titleEl   = document.getElementById('mpNowTitle');
+    const subEl     = document.getElementById('mpNowSub');
+    const vinyl     = document.getElementById('mpVinyl');
+    const bars      = document.getElementById('mpBars');
+    const miniTitle = document.getElementById('mpMiniTitle');
+    const miniSub   = document.getElementById('mpMiniSub');
     if (!titleEl) return;
 
     if (mp.currentTrack) {
         const title  = mpGuessTitle(mp.currentTrack);
         const artist = mpGuessArtist(mp.currentTrack);
         titleEl.textContent = title;
-        subEl.textContent = artist || (mp.favorites.has(mp.currentTrack) ? '♥ Favorite' : 'Now playing');
+        subEl.textContent   = artist || 'Unknown Artist';
+        document.title      = title + ' — Home Server';
         if (miniTitle) miniTitle.textContent = title;
+        if (miniSub)   miniSub.textContent   = artist || 'Unknown Artist';
+
+        // Show thumbnail in artwork panel
+        const thumbImg    = document.getElementById('mpThumbImg');
+        const vinylInner  = document.getElementById('mpVinylInner');
+        const hasThumb    = mpTrackHasThumb(mp.currentTrack);
+        if (thumbImg) {
+            if (hasThumb) {
+                thumbImg.src = mpThumbUrl(mp.currentTrack);
+                thumbImg.style.display = 'block';
+                vinyl?.classList.add('has-thumb');
+                if (vinylInner) vinylInner.style.display = 'none';
+            } else {
+                thumbImg.style.display = 'none';
+                vinyl?.classList.remove('has-thumb');
+                if (vinylInner) vinylInner.style.display = '';
+            }
+        }
+
+        // Mini bar thumbnail
+        const miniThumb = document.getElementById('mpMiniThumb');
+        if (miniThumb) {
+            if (hasThumb) {
+                miniThumb.innerHTML = `<img src="${mpThumbUrl(mp.currentTrack)}" onerror="this.parentNode.innerHTML='♪'">`;
+            } else {
+                miniThumb.textContent = '♪';
+            }
+        }
     } else {
         titleEl.textContent = 'No track selected';
-        subEl.textContent = 'Pick a track from the list';
+        subEl.textContent   = 'Add music to get started';
+        document.title      = 'Home Server';
+        const thumbImg = document.getElementById('mpThumbImg');
+        if (thumbImg) thumbImg.style.display = 'none';
+        document.getElementById('mpVinyl')?.classList.remove('has-thumb');
     }
 
     const playing = mp.currentTrack && !mpAudio.paused;
-    if (vinyl) playing ? vinyl.classList.add('spinning') : vinyl.classList.remove('spinning');
-    if (bars)  playing ? bars.classList.add('playing')   : bars.classList.remove('playing');
-    if (miniSpin) playing ? miniSpin.classList.add('spinning') : miniSpin.classList.remove('spinning');
+    if (bars) bars.classList.toggle('playing', playing);
 
     // Heart button
     const heartBtn  = document.getElementById('mpHeartBtn');
@@ -2904,6 +3031,10 @@ function mpRenderNowPlaying() {
         heartBtn.classList.toggle('active', isFav);
         if (heartIcon) heartIcon.setAttribute('fill', isFav ? '#f472b6' : 'none');
     }
+}
+
+function mpToggleExpand() {
+    document.getElementById('mpMain')?.classList.toggle('expanded');
 }
 
 function mpRenderBtns() {
@@ -2954,21 +3085,19 @@ function mpRenderPlaylistTracks() {
     const pl = mp.playlists.find(p => p.id === mp.activePl);
     if (!pl) { el.innerHTML = ''; return; }
     if (pl.tracks.length === 0) {
-        el.innerHTML = `<div style="color:#555;font-size:12px;padding:12px 8px">Playlist is empty.<br>Right-click / ⋯ a track to add it.</div>`;
+        el.innerHTML = `<div class="mp-empty" style="padding:16px 8px"><div class="mp-empty-icon">🎵</div><div>Playlist is empty</div><div style="font-size:11px;opacity:.6;margin-top:4px">Right-click a track to add it</div></div>`;
         return;
     }
-    el.innerHTML = `<div class="mp-pl-header" style="padding-top:12px">
-        <span style="color:#888">${escapeHtml(pl.name)}</span>
+    const header = `<div class="mp-pl-header" style="padding-top:8px">
+        <span style="color:var(--mp-sub)">${escapeHtml(pl.name)}</span>
         <button onclick="mpPlayPlaylist('${escapeHtml(pl.id)}')" class="mp-pl-new-btn">▶ Play all</button>
-    </div>` + pl.tracks.map((tn, i) => {
-        const clean = tn.replace(/\.(mp3|flac|wav|ogg|m4a|aac|opus|wma|webm)$/i, '');
-        return `<div class="mp-track-item" onclick="mpPlayTrackFrom('${escapeHtml(tn)}','pl','${escapeHtml(pl.id)}')">
-            <div class="mp-track-num">${i+1}</div>
-            <div class="mp-track-playing-icon"><span></span><span></span><span></span></div>
-            <div class="mp-track-info"><div class="mp-track-name">${escapeHtml(clean)}</div></div>
-            <button class="mp-pl-del" onclick="mpRemoveFromPlaylist('${escapeHtml(pl.id)}','${escapeHtml(tn)}',event)">✕</button>
-        </div>`;
+    </div>`;
+    // Build fake track objects for mpRenderTrackRow
+    const rows = pl.tracks.map((tn, i) => {
+        const fakeTrack = { name: tn, size_fmt: '' };
+        return mpRenderTrackRow(fakeTrack, i, 'pl', pl.id);
     }).join('');
+    el.innerHTML = header + rows;
 }
 
 // ── Playback ──────────────────────────────────────────────────────────
@@ -3029,7 +3158,6 @@ function mpLoad(name) {
     mpRenderNowPlaying();
     mpRenderTrackList();
     mpRenderBtns();
-    document.title = name.replace(/\.(mp3|flac|wav|ogg|m4a|aac|opus|wma|webm)$/i, '') + ' — NAS';
 }
 
 function mpTogglePlay() {
@@ -3081,6 +3209,39 @@ function mpBindAudio() {
     mpAudio.addEventListener('play',    () => { mpRenderBtns(); mpRenderNowPlaying(); });
     mpAudio.addEventListener('pause',   () => { mpRenderBtns(); mpRenderNowPlaying(); });
     mpAudio.addEventListener('ended',   mpNext);
+
+    // Auto-remove broken/missing tracks
+    mpAudio.addEventListener('error', () => {
+        if (!mp.currentTrack) return;
+        const broken = mp.currentTrack;
+        console.warn('Track failed to load, removing:', broken);
+        // Remove from tracks list
+        mp.tracks = mp.tracks.filter(t => t.name !== broken);
+        // Remove from all playlists
+        mp.playlists.forEach(pl => { pl.tracks = pl.tracks.filter(n => n !== broken); });
+        mp.favorites.delete(broken);
+        // Remove from queue
+        const qi = mp.queue.indexOf(broken);
+        if (qi !== -1) mp.queue.splice(qi, 1);
+        if (mp.currentIndex >= mp.queue.length) mp.currentIndex = 0;
+        mpSavePrefs();
+        showToast('Removed broken track: ' + mpGuessTitle(broken), 'error');
+        // Try to delete from server silently
+        fetch('/api/music/delete', {
+            method: 'DELETE',
+            headers: {'Content-Type':'application/json', Authorization: 'Bearer ' + token},
+            body: JSON.stringify({filename: broken})
+        }).catch(() => {});
+        // Play next if queue has tracks
+        if (mp.queue.length > 0) {
+            mpLoad(mp.queue[mp.currentIndex]);
+            mpAudio.play().catch(() => {});
+        } else {
+            mp.currentTrack = null;
+            mpRenderNowPlaying();
+        }
+        mpRenderTrackList();
+    });
 
     mpAudio.addEventListener('timeupdate', () => {
         if (!mpAudio.duration || !isFinite(mpAudio.duration)) return;
@@ -3376,10 +3537,11 @@ async function mpDownloadYT() {
 }
 
 async function mpDownloadChannel() {
-    const url   = document.getElementById('mpChUrl').value.trim();
-    const limit = parseInt(document.getElementById('mpChLimit').value || '0', 10);
-    const fmt   = _mpFmt.ch;
-    const thumb = document.getElementById('mpChThumb')?.checked ?? true;
+    const url     = document.getElementById('mpChUrl').value.trim();
+    const limit   = parseInt(document.getElementById('mpChLimit').value || '0', 10);
+    const plName  = document.getElementById('mpChPlName')?.value.trim() || '';
+    const fmt     = _mpFmt.ch;
+    const thumb   = document.getElementById('mpChThumb')?.checked ?? true;
     if (!url) return showToast('Enter a channel or playlist URL', 'error');
     const statusEl = document.getElementById('mpChStatus');
     const btn      = document.getElementById('mpChBtn');
@@ -3390,7 +3552,7 @@ async function mpDownloadChannel() {
         const res = await fetch('/api/music/channel', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-            body: JSON.stringify({ url, format: fmt, thumbnail: thumb, limit })
+            body: JSON.stringify({ url, format: fmt, thumbnail: thumb, limit, playlist_name: plName })
         });
         const data = await safeJson(res);
         if (!res.ok) throw new Error(data.msg);
@@ -3403,17 +3565,19 @@ async function mpDownloadChannel() {
                 if (sd.status === 'done') {
                     clearInterval(poll);
                     const n = sd.count || sd.total || '?';
-                    show(`✓ Done! ${n} track(s) downloaded.`, 'success');
+                    const plMsg = sd.playlist ? ` Playlist <b>"${escapeHtml(sd.playlist)}"</b> created.` : '';
+                    show(`✓ Done! ${n} track(s) downloaded.${plMsg}`, 'success');
                     btn.disabled = false;
                     document.getElementById('mpChUrl').value = '';
                     await mpLoadTracks();
+                    await mpLoadPrefs();   // reload playlists so new one appears
                     mpRenderTrackList();
+                    mpRenderPlaylists();
                 } else if (sd.status === 'error') {
                     clearInterval(poll);
                     show('✗ Error: ' + (sd.error || 'Unknown'), 'error');
                     btn.disabled = false;
                 } else {
-                    // Show live count
                     const n = sd.count || 0;
                     if (n > 0) show(`⏬ Downloaded ${n} track(s) so far…`, 'info');
                 }
@@ -3523,6 +3687,44 @@ async function mpScanTracks() {
         showToast(e.message, 'error');
     } finally {
         if (btn) btn.style.opacity = '';
+    }
+}
+
+async function mpEnrichLibrary() {
+    const btn = document.querySelector('.mp-enrich-btn');
+    if (btn) { btn.style.opacity = '0.5'; btn.style.pointerEvents = 'none'; }
+    showToast('🔍 Looking up artists via MusicBrainz… this may take a minute', 'info');
+    try {
+        const res = await fetch('/api/music/enrich', {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + token }
+        });
+        const data = await safeJson(res);
+        if (!res.ok) throw new Error(data.msg);
+        const jid = data.job_id;
+        // Poll until done
+        const poll = setInterval(async () => {
+            try {
+                const sr = await fetch('/api/music/enrich/status/' + jid, {
+                    headers: { Authorization: 'Bearer ' + token }
+                });
+                const sd = await safeJson(sr);
+                const pct = sd.total ? Math.round((sd.done / sd.total) * 100) : 0;
+                if (btn) btn.title = `${sd.done}/${sd.total} checked…`;
+                if (!sd.running) {
+                    clearInterval(poll);
+                    const n = sd.renamed?.length || 0;
+                    showToast(`✓ Done! Artist names found for ${n} track${n !== 1 ? 's' : ''}.`, 'success');
+                    if (btn) { btn.style.opacity = ''; btn.style.pointerEvents = ''; btn.title = 'Auto-find artist names for all tracks'; }
+                    // Reload library with new names
+                    await mpLoadTracks();
+                    mpRenderTrackList();
+                }
+            } catch {}
+        }, 2000);
+    } catch (e) {
+        showToast(e.message, 'error');
+        if (btn) { btn.style.opacity = ''; btn.style.pointerEvents = ''; }
     }
 }
 
