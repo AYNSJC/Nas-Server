@@ -1,0 +1,468 @@
+<!-- ═══════════════════════════════════════════════════════════════
+     MUSIC PLAYER v2 — Drop-in overlay HTML
+     Replace the entire <div id="musicOverlay"> block in index.html
+     ═══════════════════════════════════════════════════════════════ -->
+
+<div id="musicOverlay" class="open" style="display:none;">
+
+  <div id="mp2Layout">
+
+    <!-- ── SIDEBAR NAV ───────────────────────────────────────── -->
+    <nav id="mp2Nav">
+      <div class="mp2-nav-logo">
+        <svg width="28" height="28" viewBox="0 0 32 32">
+          <circle cx="16" cy="16" r="16" fill="#7c3aed"/>
+          <path d="M12 22V10l12-2v12" stroke="white" stroke-width="2" fill="none" stroke-linecap="round"/>
+          <circle cx="9" cy="22" r="3" fill="white"/>
+          <circle cx="21" cy="20" r="3" fill="white"/>
+        </svg>
+        <span style="font-size:15px;font-weight:700;color:#f1f0ff;">Resonance</span>
+        <span>BETA</span>
+      </div>
+
+      <div class="mp2-nav-section-title">Library</div>
+      <button class="mp2-nav-btn active" id="mp2NavHome" onclick="mp2GoView('home')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+        <span class="mp2-nav-label">Home</span>
+      </button>
+      <button class="mp2-nav-btn" id="mp2NavSongs" onclick="mp2GoView('songs')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+        <span class="mp2-nav-label">Songs</span>
+      </button>
+      <button class="mp2-nav-btn" id="mp2NavArtists" onclick="mp2GoView('artists')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span class="mp2-nav-label">Artists</span>
+      </button>
+      <button class="mp2-nav-btn" id="mp2NavPlaylists" onclick="mp2GoView('playlists')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        <span class="mp2-nav-label">Playlists</span>
+      </button>
+      <button class="mp2-nav-btn" id="mp2NavLiked" onclick="mp2GoView('liked')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        <span class="mp2-nav-label">Liked Songs</span>
+      </button>
+
+      <div class="mp2-nav-divider"></div>
+      <div class="mp2-nav-section-title">Playlists</div>
+      <div id="mp2NavPlaylistList"></div>
+      <button class="mp2-nav-add-pl" onclick="mp2CreatePlaylist()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New Playlist
+      </button>
+    </nav>
+
+    <!-- ── MAIN CONTENT ──────────────────────────────────────── -->
+    <main id="mp2Main">
+
+      <!-- Top header bar -->
+      <div id="mp2Header">
+        <div class="mp2-header-nav">
+          <button title="Go back" onclick="mp2NavBack()">‹</button>
+          <button title="Go forward" onclick="mp2NavFwd()">›</button>
+        </div>
+        <div class="mp2-search-wrap">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="mp2SearchInput" placeholder="Search songs, artists…" oninput="mp2OnSearch()">
+        </div>
+        <div class="mp2-header-actions">
+          <button class="mp2-btn-icon" title="Scan library" onclick="mp2ScanLibrary()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          </button>
+          <button class="mp2-btn-icon" title="Find artist art" onclick="mp2EnrichArtists()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><circle cx="18" cy="8" r="2" fill="currentColor" stroke="none"/></svg>
+          </button>
+          <button class="mp2-btn-add" onclick="mp2OpenAddPanel()">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Music
+          </button>
+          <button class="mp2-btn-icon" title="Close player" onclick="mp2Close()">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Views -->
+      <div id="mp2ViewContainer">
+
+        <!-- HOME VIEW -->
+        <div class="mp2-view active" id="mp2ViewHome">
+          <div class="mp2-home-greeting" id="mp2Greeting">Good evening 🎵</div>
+          <!-- Sections injected by JS -->
+        </div>
+
+        <!-- SONGS VIEW -->
+        <div class="mp2-view" id="mp2ViewSongs">
+          <div class="mp2-section" style="padding-top:24px;">
+            <div class="mp2-section-header">
+              <div class="mp2-section-title">All Songs</div>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <select id="mp2SortSelect" onchange="mp2RenderSongsView()" style="background:var(--mp2-surface);border:1px solid var(--mp2-border);border-radius:6px;color:var(--mp2-text2);padding:5px 10px;font-size:12.5px;outline:none;cursor:pointer;">
+                  <option value="name">A → Z</option>
+                  <option value="recent">Recently added</option>
+                </select>
+              </div>
+            </div>
+            <div class="mp2-track-list" id="mp2SongsList"></div>
+          </div>
+        </div>
+
+        <!-- ARTISTS VIEW -->
+        <div class="mp2-view" id="mp2ViewArtists">
+          <div style="padding:28px 28px 16px;">
+            <div class="mp2-section-title">Artists</div>
+          </div>
+          <div class="mp2-scroll-row" id="mp2ArtistsGrid" style="flex-wrap:wrap;overflow-x:visible;padding:8px 28px 24px;gap:20px;"></div>
+        </div>
+
+        <!-- ARTIST DETAIL VIEW -->
+        <div class="mp2-view" id="mp2ViewArtistDetail">
+          <div class="mp2-artist-hero" id="mp2ArtistHero"></div>
+          <div class="mp2-pl-detail-actions">
+            <button class="mp2-pl-play-btn" onclick="mp2PlayArtist()">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            </button>
+          </div>
+          <div class="mp2-track-list" id="mp2ArtistTracks"></div>
+        </div>
+
+        <!-- PLAYLISTS VIEW -->
+        <div class="mp2-view" id="mp2ViewPlaylists">
+          <div style="padding:28px 28px 16px;display:flex;align-items:center;justify-content:space-between;">
+            <div class="mp2-section-title">Your Playlists</div>
+            <button class="mp2-btn-add" onclick="mp2CreatePlaylist()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              New
+            </button>
+          </div>
+          <div id="mp2PlaylistsGrid" style="display:flex;flex-wrap:wrap;gap:20px;padding:4px 28px 28px;"></div>
+        </div>
+
+        <!-- PLAYLIST DETAIL VIEW -->
+        <div class="mp2-view" id="mp2ViewPlaylistDetail">
+          <div class="mp2-pl-detail-hero">
+            <div class="mp2-pl-detail-cover" id="mp2PlDetailCover"></div>
+            <div class="mp2-pl-detail-info">
+              <div class="mp2-pl-detail-label">Playlist</div>
+              <div class="mp2-pl-detail-name" id="mp2PlDetailName" contenteditable="true" onblur="mp2SavePlName()" onkeydown="if(event.key==='Enter'){this.blur();event.preventDefault();}"></div>
+              <div class="mp2-pl-detail-count" id="mp2PlDetailCount"></div>
+            </div>
+          </div>
+          <div class="mp2-pl-detail-actions">
+            <button class="mp2-pl-play-btn" onclick="mp2PlayActivePlaylist()">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            </button>
+            <button class="mp2-pl-add-songs-btn" onclick="mp2OpenAddToPlaylist()">+ Add Songs</button>
+            <button class="mp2-ctrl-btn" title="Delete playlist" onclick="mp2DeleteActivePl()" style="margin-left:auto;color:#f87171;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+            </button>
+          </div>
+          <div class="mp2-track-list" id="mp2PlDetailTracks"></div>
+        </div>
+
+        <!-- LIKED SONGS VIEW -->
+        <div class="mp2-view" id="mp2ViewLiked">
+          <div class="mp2-liked-hero">
+            <div class="mp2-liked-hero-cover">♥</div>
+            <div class="mp2-liked-hero-info">
+              <h2>Liked Songs</h2>
+              <p id="mp2LikedCount">Loading…</p>
+            </div>
+            <button class="mp2-liked-play" onclick="mp2PlayLiked()">▶ Play All</button>
+          </div>
+          <div class="mp2-track-list" id="mp2LikedList"></div>
+        </div>
+
+      </div><!-- /mp2ViewContainer -->
+
+    </main><!-- /mp2Main -->
+
+  </div><!-- /mp2Layout -->
+
+  <!-- ── BOTTOM PLAYER BAR ──────────────────────────────────── -->
+  <div id="mp2BottomBar">
+
+    <!-- Left: current track -->
+    <div class="mp2-bar-track">
+      <div class="mp2-bar-art" id="mp2BarArt" onclick="mp2OpenCD()" title="Open player">
+        <div class="mp2-bar-art-ph" id="mp2BarArtPh">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+        </div>
+        <img id="mp2BarArtImg" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:cover;" alt="">
+      </div>
+      <div class="mp2-bar-track-info">
+        <div class="mp2-bar-track-title" id="mp2BarTitle">Select a song</div>
+        <div class="mp2-bar-track-artist" id="mp2BarArtist">—</div>
+      </div>
+      <button class="mp2-bar-fav" id="mp2BarFav" onclick="mp2ToggleFavCurrent()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+      </button>
+    </div>
+
+    <!-- Center: controls + progress -->
+    <div class="mp2-bar-controls">
+      <div class="mp2-bar-btns">
+        <button class="mp2-ctrl-btn" id="mp2BtnShuffle" onclick="mp2ToggleShuffle()" title="Shuffle">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+        </button>
+        <button class="mp2-ctrl-btn" onclick="mp2Prev()" title="Previous">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        </button>
+        <button class="mp2-play-btn" id="mp2PlayBtn" onclick="mp2TogglePlay()">
+          <svg id="mp2PlayBtnSvg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </button>
+        <button class="mp2-ctrl-btn" onclick="mp2Next()" title="Next">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        </button>
+        <button class="mp2-ctrl-btn" id="mp2BtnLoop" onclick="mp2ToggleLoop()" title="Loop">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+        </button>
+      </div>
+      <div class="mp2-bar-progress">
+        <span class="mp2-time" id="mp2BarCurTime">0:00</span>
+        <div class="mp2-progress" id="mp2BarProgress" onclick="mp2SeekClick(event)">
+          <div class="mp2-progress-fill" id="mp2BarFill" style="width:0%">
+            <div class="mp2-progress-thumb"></div>
+          </div>
+        </div>
+        <span class="mp2-time end" id="mp2BarDuration">0:00</span>
+      </div>
+    </div>
+
+    <!-- Right: volume -->
+    <div class="mp2-bar-right">
+      <button class="mp2-ctrl-btn" id="mp2BtnVol" onclick="mp2ToggleMute()" title="Mute">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+      </button>
+      <div class="mp2-vol-wrap">
+        <div class="mp2-vol" id="mp2VolBar" onclick="mp2VolClick(event)">
+          <div class="mp2-vol-fill" id="mp2VolFill" style="width:80%"></div>
+        </div>
+      </div>
+      <button class="mp2-btn-icon" title="Queue / Lyrics" onclick="mp2OpenCD()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </div>
+
+  </div><!-- /mp2BottomBar -->
+
+</div><!-- /musicOverlay -->
+
+
+<!-- ══════════════════════════════════════════════════════════
+     CD PLAYER MODAL (separate from overlay, above everything)
+     ══════════════════════════════════════════════════════════ -->
+<div id="mp2CDModal">
+  <div class="mp2-cd-bg">
+    <div class="mp2-cd-bg-img" id="mp2CDBgImg"></div>
+  </div>
+  <button class="mp2-cd-close" onclick="mp2CloseCD()">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+  </button>
+
+  <div class="mp2-cd-content">
+    <!-- Vinyl -->
+    <div class="mp2-vinyl" id="mp2Vinyl" onclick="mp2TogglePlay()">
+      <div class="mp2-vinyl-outer">
+        <div class="mp2-vinyl-label" id="mp2VinylLabel">
+          <div class="mp2-vinyl-label-ph" id="mp2VinylLabelPh">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          </div>
+        </div>
+        <div class="mp2-vinyl-hole"></div>
+        <div class="mp2-vinyl-sheen"></div>
+      </div>
+    </div>
+
+    <!-- Info + controls -->
+    <div class="mp2-cd-info">
+      <div class="mp2-cd-badge" id="mp2CDBadge">Now Playing</div>
+      <div class="mp2-cd-title" id="mp2CDTitle">Select a song</div>
+      <div class="mp2-cd-artist" id="mp2CDArtist">—</div>
+
+      <div class="mp2-cd-progress">
+        <span class="mp2-time" id="mp2CDCurTime">0:00</span>
+        <div class="mp2-progress" id="mp2CDProgress" onclick="mp2SeekClick(event)">
+          <div class="mp2-progress-fill" id="mp2CDFill" style="width:0%">
+            <div class="mp2-progress-thumb"></div>
+          </div>
+        </div>
+        <span class="mp2-time end" id="mp2CDDuration">0:00</span>
+      </div>
+
+      <div class="mp2-cd-controls">
+        <button class="mp2-cd-ctrl" id="mp2CDShuffle" onclick="mp2ToggleShuffle()" title="Shuffle">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+        </button>
+        <button class="mp2-cd-ctrl" onclick="mp2Prev()">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        </button>
+        <button class="mp2-cd-play-btn" id="mp2CDPlayBtn" onclick="mp2TogglePlay()">
+          <svg id="mp2CDPlayBtnSvg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </button>
+        <button class="mp2-cd-ctrl" onclick="mp2Next()">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        </button>
+        <button class="mp2-cd-ctrl" id="mp2CDLoop" onclick="mp2ToggleLoop()" title="Loop">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+        </button>
+      </div>
+
+      <div class="mp2-cd-actions">
+        <button class="mp2-bar-fav" id="mp2CDFav" onclick="mp2ToggleFavCurrent()" style="opacity:1;width:40px;height:40px;">
+          <svg id="mp2CDFavSvg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        </button>
+        <div class="mp2-vol-wrap" style="flex:1;max-width:140px;">
+          <button class="mp2-cd-ctrl" id="mp2CDVolBtn" onclick="mp2ToggleMute()" style="width:28px;height:28px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+          </button>
+          <div class="mp2-vol" id="mp2CDVolBar" onclick="mp2VolClick(event)" style="width:100px;">
+            <div class="mp2-vol-fill" id="mp2CDVolFill" style="width:80%"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div><!-- /mp2CDModal -->
+
+
+<!-- ══════════════════════════════════════════════════════════
+     ADD MUSIC PANEL
+     ══════════════════════════════════════════════════════════ -->
+<div id="mp2AddPanel" class="mp2-add-panel-overlay" style="display:none;" onclick="if(event.target===this)mp2CloseAddPanel()">
+  <div class="mp2-add-panel">
+    <div class="mp2-add-panel-header">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      <h3>Add Music</h3>
+      <button class="mp2-panel-close" onclick="mp2CloseAddPanel()">×</button>
+    </div>
+    <div class="mp2-panel-tabs">
+      <button class="mp2-panel-tab active" id="mp2AddTabYT" onclick="mp2SwitchAddTab('yt')">YouTube URL</button>
+      <button class="mp2-panel-tab" id="mp2AddTabCh" onclick="mp2SwitchAddTab('ch')">Channel / Playlist</button>
+      <button class="mp2-panel-tab" id="mp2AddTabBrowse" onclick="mp2SwitchAddTab('browse')">Browse & Select</button>
+      <button class="mp2-panel-tab" id="mp2AddTabFile" onclick="mp2SwitchAddTab('file')">Upload File</button>
+    </div>
+    <div class="mp2-panel-body">
+
+      <!-- YT Single -->
+      <div id="mp2PaneYT">
+        <div class="mp2-form-group">
+          <label class="mp2-form-label">YouTube / YouTube Music URL</label>
+          <input class="mp2-form-input" type="url" id="mp2YTUrl" placeholder="https://www.youtube.com/watch?v=...">
+        </div>
+        <div class="mp2-form-group">
+          <label class="mp2-form-label">Track Name <span style="opacity:.5;font-weight:400;">(optional — uses video title if blank)</span></label>
+          <input class="mp2-form-input" type="text" id="mp2YTName" placeholder="e.g. Song Title">
+        </div>
+        <div class="mp2-form-group">
+          <label class="mp2-form-label">Artist Name <span style="opacity:.5;font-weight:400;">(optional)</span></label>
+          <input class="mp2-form-input" type="text" id="mp2YTArtist" placeholder="e.g. Artist Name">
+        </div>
+        <div class="mp2-form-group">
+          <label class="mp2-form-label">Format</label>
+          <div class="mp2-fmt-row">
+            <button class="mp2-fmt-btn active" data-fmt="mp3" onclick="mp2SelFmt('yt','mp3',this)">MP3</button>
+            <button class="mp2-fmt-btn" data-fmt="wav" onclick="mp2SelFmt('yt','wav',this)">WAV</button>
+            <span class="mp2-fmt-sep">·</span>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--mp2-text2);cursor:pointer;">
+              <input type="checkbox" id="mp2YTThumb" checked style="accent-color:var(--mp2-accent);">
+              Save artwork
+            </label>
+          </div>
+        </div>
+        <div class="mp2-status-bar" id="mp2YTStatus"></div>
+        <button class="mp2-submit-btn" id="mp2YTBtn" onclick="mp2DlYT()">Download Track</button>
+      </div>
+
+      <!-- Channel -->
+      <div id="mp2PaneCh" style="display:none;">
+        <div class="mp2-form-group">
+          <label class="mp2-form-label">Channel or Playlist URL</label>
+          <input class="mp2-form-input" type="url" id="mp2ChUrl" placeholder="https://www.youtube.com/@ChannelName">
+          <div class="mp2-form-hint">Supports channel URLs, /videos, /releases, and playlist links</div>
+        </div>
+        <div class="mp2-form-group">
+          <label class="mp2-form-label">Artist / Playlist Name <span style="opacity:.5;font-weight:400;">(required for channels)</span></label>
+          <input class="mp2-form-input" type="text" id="mp2ChArtist" placeholder="e.g. Artist Name — used when auto-detect fails">
+        </div>
+        <div class="mp2-form-group">
+          <label class="mp2-form-label">Download Source</label>
+          <div class="mp2-type-btns" style="display:inline-flex;">
+            <button class="mp2-type-btn active" id="mp2ChTypeVideos" onclick="mp2ChType('videos',this)">Videos</button>
+            <button class="mp2-type-btn" id="mp2ChTypeReleases" onclick="mp2ChType('releases',this)">Releases</button>
+            <button class="mp2-type-btn" id="mp2ChTypeBoth" onclick="mp2ChType('both',this)">Both</button>
+          </div>
+        </div>
+        <div class="mp2-form-group">
+          <label class="mp2-form-label">Max videos <span style="opacity:.5;font-weight:400;">(0 = all)</span></label>
+          <input class="mp2-form-input" type="number" id="mp2ChLimit" value="0" min="0" max="9999" style="max-width:120px;">
+        </div>
+        <div class="mp2-form-group">
+          <label class="mp2-form-label">Format</label>
+          <div class="mp2-fmt-row">
+            <button class="mp2-fmt-btn active" data-fmt="mp3" onclick="mp2SelFmt('ch','mp3',this)">MP3</button>
+            <button class="mp2-fmt-btn" data-fmt="wav" onclick="mp2SelFmt('ch','wav',this)">WAV</button>
+          </div>
+        </div>
+        <div class="mp2-status-bar" id="mp2ChStatus"></div>
+        <button class="mp2-submit-btn" id="mp2ChBtn" onclick="mp2DlChannel()">Download Channel / Playlist</button>
+      </div>
+
+      <!-- Browse & Select -->
+      <div id="mp2PaneBrowse" style="display:none;">
+        <div class="mp2-form-group">
+          <label class="mp2-form-label">Channel or Playlist URL</label>
+          <div style="display:flex;gap:8px;">
+            <input class="mp2-form-input" type="url" id="mp2BrowseUrl" placeholder="https://www.youtube.com/@Artist" style="flex:1;">
+            <div class="mp2-type-btns">
+              <button class="mp2-type-btn active" id="mp2BrTypeVideos" onclick="mp2BrType('videos',this)">Videos</button>
+              <button class="mp2-type-btn" id="mp2BrTypeReleases" onclick="mp2BrType('releases',this)">Releases</button>
+              <button class="mp2-type-btn" id="mp2BrTypeBoth" onclick="mp2BrType('both',this)">Both</button>
+            </div>
+            <button class="mp2-fetch-btn" id="mp2BrowseFetch" onclick="mp2BrowseFetch()">Fetch</button>
+          </div>
+        </div>
+        <div id="mp2BrowseResults"></div>
+      </div>
+
+      <!-- File Upload -->
+      <div id="mp2PaneFile" style="display:none;">
+        <div class="mp2-form-group">
+          <label class="mp2-form-label">Artist Name <span style="opacity:.5;font-weight:400;">(optional)</span></label>
+          <input class="mp2-form-input" type="text" id="mp2FileArtist" placeholder="e.g. Artist Name">
+        </div>
+        <div class="mp2-drop-zone" id="mp2DropZone" onclick="document.getElementById('mp2FileInput').click()">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <p>Click or drag audio files here</p>
+          <small>MP3 · WAV · FLAC · OGG · M4A · OPUS supported</small>
+        </div>
+        <input type="file" id="mp2FileInput" accept=".mp3,.flac,.wav,.ogg,.m4a,.aac,.opus,.wma,.webm" multiple style="display:none;" onchange="mp2UploadFiles(this)">
+        <div class="mp2-status-bar" id="mp2FileStatus"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Context menu -->
+<div id="mp2Ctx" class="mp2-ctx" style="display:none;"></div>
+
+<!-- Add-to-playlist modal -->
+<div id="mp2AddSongsModal" class="mp2-add-songs-modal" style="display:none;" onclick="if(event.target===this)this.style.display='none'">
+  <div class="mp2-add-songs-panel">
+    <div class="mp2-add-songs-header">
+      <h3 id="mp2AddSongsTitle">Add Songs</h3>
+      <button class="mp2-panel-close" onclick="document.getElementById('mp2AddSongsModal').style.display='none'">×</button>
+    </div>
+    <div class="mp2-add-songs-search">
+      <input type="text" id="mp2AddSongsSearch" placeholder="Search tracks…" oninput="mp2FilterAddSongs()">
+    </div>
+    <div class="mp2-add-songs-list" id="mp2AddSongsList"></div>
+    <div class="mp2-add-songs-footer">
+      <button class="mp2-pl-add-songs-btn" onclick="document.getElementById('mp2AddSongsModal').style.display='none'">Cancel</button>
+      <button class="mp2-add-songs-confirm" onclick="mp2ConfirmAddSongs()">Add Selected</button>
+    </div>
+  </div>
+</div>
+
+<!-- Hidden audio -->
+<audio id="mpAudio" preload="metadata"></audio>

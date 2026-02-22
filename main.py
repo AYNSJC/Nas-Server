@@ -44,8 +44,6 @@ JWT_SECRET = os.getenv("JWT_SECRET_KEY", secrets.token_urlsafe(64))
 
 DANGEROUS_EXTENSIONS = {
     'exe', 'bat', 'cmd', 'com', 'pif', 'scr', 'vbs', 'msi', 'hta',
-    'sh', 'bash', 'zsh',
-    'py', 'rb', 'pl', 'php', 'cgi',
     'ps1', 'psm1', 'psd1',
     'apk', 'ipa',
 }
@@ -2941,6 +2939,130 @@ def music_enrich_status(jid):
     return jsonify(s), 200
 
 
+
+# ──────────────────────────────────────────────────────────────────
+#  CHANNEL BROWSE — list videos/releases (for pick & choose UI)
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/music/channel/browse", methods=["GET"])
+@jwt_required()
+def music_channel_browse():
+    url   = request.args.get("url", "").strip()
+    type_ = request.args.get("type", "videos")
+    limit = int(request.args.get("limit", 200))
+    if not url:
+        return jsonify({"error": "url required"}), 400
+    if not YT_DLP_AVAILABLE:
+        return jsonify({"error": "yt-dlp not installed"}), 503
+
+    import yt_dlp as _yt_dlp_mod
+
+    base = url.rstrip("/")
+    for suf in ("/videos", "/releases", "/shorts", "/streams", "/playlists"):
+        if base.endswith(suf):
+            base = base[:-len(suf)]
+            break
+
+    is_channel = ("/@" in url or "/channel/" in url or "/c/" in url or "/user/" in url)
+    if is_channel:
+        if type_ == "releases":
+            urls = [base + "/releases"]
+        elif type_ == "both":
+            urls = [base + "/videos", base + "/releases"]
+        else:
+            urls = [base + "/videos"]
+    else:
+        urls = [url]
+
+    results, seen_ids = [], set()
+    ydl_opts = {"quiet": True, "no_warnings": True, "ignoreerrors": True,
+                "extract_flat": True, "noplaylist": False}
+    if limit > 0:
+        ydl_opts["playlistend"] = limit
+    try:
+        with _yt_dlp_mod.YoutubeDL(ydl_opts) as ydl:
+            for fetch_url in urls:
+                try:
+                    info = ydl.extract_info(fetch_url, download=False)
+                    if not info:
+                        continue
+                    entries = info.get("entries") or [info]
+                    for entry in entries:
+                        if not entry:
+                            continue
+                        vid_id = entry.get("id") or entry.get("url", "")
+                        if vid_id in seen_ids:
+                            continue
+                        seen_ids.add(vid_id)
+                        dur_s = entry.get("duration") or 0
+                        m, s = divmod(int(dur_s), 60)
+                        dur_str = f"{m}:{s:02d}" if dur_s else ""
+                        thumbs = entry.get("thumbnails") or []
+                        thumb_url = ""
+                        if thumbs:
+                            mid = sorted(thumbs, key=lambda t: (t.get("width") or 0))
+                            thumb_url = mid[len(mid) // 2].get("url", "")
+                        elif entry.get("thumbnail"):
+                            thumb_url = entry["thumbnail"]
+                        entry_url = entry.get("webpage_url") or entry.get("url") or f"https://www.youtube.com/watch?v={vid_id}"
+                        results.append({
+                            "id": vid_id,
+                            "title": entry.get("title") or "Untitled",
+                            "url": entry_url,
+                            "thumbnail": thumb_url,
+                            "duration": dur_str,
+                            "type": "release" if "releases" in fetch_url else "video",
+                            "uploader": entry.get("uploader") or entry.get("channel") or "",
+                        })
+                except Exception as e:
+                    logger.warning(f"Browse error for {fetch_url}: {e}")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"videos": results, "count": len(results)}), 200
+
+
+
+# ──────────────────────────────────────────────────────────────────
+#  ROUTE ALIASES — music-v2.js uses these URLs
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/music/download/channel", methods=["POST"])
+@jwt_required()
+def music_download_channel_alias():
+    """Alias: music-v2.js calls /api/music/download/channel → music_channel."""
+    return music_channel()
+
+
+@app.route("/api/music/download/status/<did>", methods=["GET"])
+@jwt_required()
+def music_download_status_alias(did):
+    """Alias: music-v2.js polls /api/music/download/status/<id> for any job."""
+    s = _dl_status.get(did)
+    if not s:
+        return jsonify({"msg": "Unknown job"}), 404
+    done    = s.get("status") in ("done", "error")
+    running = s.get("status") == "downloading"
+    count   = s.get("count", 0)
+    total   = s.get("total")
+    if done:
+        msg = s.get("filename") or (f"{count} track(s) downloaded" if count else "Done")
+        if s.get("status") == "error":
+            msg = f"Error: {s.get('error', 'Unknown error')}"
+    elif running:
+        msg = f"Downloading… ({count}" + (f"/{total}" if total else "") + " tracks)"
+    else:
+        msg = "Starting…"
+    return jsonify({
+        "done": done,
+        "running": running,
+        "msg": msg,
+        "count": count,
+        "total": total,
+        "playlist": s.get("playlist"),
+        "error": s.get("error"),
+    }), 200
+
 # ──────────────────────────────────────────────────────────────────
 #  LYRICS — proxy to lrclib.net (free, no API key needed)
 # ──────────────────────────────────────────────────────────────────
@@ -2995,6 +3117,253 @@ def _parse_lrc(lrc_text):
             if text:
                 lines.append({"time_ms": ms, "text": text})
     return lines
+
+
+# ──────────────────────────────────────────────────────────────────
+#  MUSIC DOWNLOAD (single track) — new unified endpoint
+#  music-v2.js calls /api/music/download (old was /api/music/youtube)
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/music/download", methods=["POST"])
+@jwt_required()
+def music_download_single():
+    """Alias for music_youtube that music-v2.js calls."""
+    return music_youtube()
+
+
+# ──────────────────────────────────────────────────────────────────
+#  BATCH DOWNLOAD — download multiple individual video URLs
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/music/download/batch", methods=["POST"])
+@jwt_required()
+def music_download_batch():
+    """Download a list of video URLs (from browse-and-select UI)."""
+    if not YT_DLP_AVAILABLE:
+        return jsonify({"msg": "yt-dlp not installed"}), 500
+    data   = request.get_json() or {}
+    urls   = data.get("urls", [])
+    fmt    = data.get("format", "mp3").strip().lower()
+    thumb  = bool(data.get("thumbnail", True))
+    artist = data.get("artist", "").strip()
+    username = get_jwt_identity()
+    if fmt not in ("mp3", "wav"):
+        fmt = "mp3"
+    if not urls:
+        return jsonify({"msg": "urls required"}), 400
+
+    did = secrets.token_urlsafe(8)
+    _dl_status[did] = {"status": "downloading", "name": f"{len(urls)} tracks",
+                       "error": None, "filename": None, "count": 0, "total": len(urls)}
+
+    downloaded_files = []
+
+    def progress_hook(d):
+        if d.get("status") == "finished":
+            fpath = d.get("filename", "")
+            if fpath:
+                downloaded_files.append(os.path.basename(fpath))
+            _dl_status[did]["count"] = len(downloaded_files)
+
+    def run():
+        if artist:
+            tmpl = str(MUSIC_DIR / f'{artist} - %(title)s.%(ext)s')
+        else:
+            tmpl = str(MUSIC_DIR / '%(artist)s - %(title)s.%(ext)s')
+        postproc = [{"key": "FFmpegExtractAudio", "preferredcodec": fmt,
+                     "preferredquality": "192" if fmt == "mp3" else "0"}]
+        if thumb:
+            postproc += [{"key": "FFmpegMetadata"}]
+            if fmt == "mp3":
+                postproc += [{"key": "EmbedThumbnail"}]
+        opts = {
+            "format": "bestaudio/best",
+            "outtmpl": tmpl,
+            "postprocessors": postproc,
+            "writethumbnail": thumb,
+            "ignoreerrors": True,
+            "noplaylist": True,
+            "quiet": True, "no_warnings": True,
+            "progress_hooks": [progress_hook],
+        }
+        try:
+            with _yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download(urls)
+            count = len(downloaded_files)
+            _dl_status[did].update({"status": "done", "total": count,
+                                    "filename": f"{count} track(s) downloaded"})
+            logger.info(f"Batch download done: {count} tracks")
+        except Exception as e:
+            _dl_status[did].update({"status": "error", "error": str(e)})
+            logger.error(f"Batch download error: {e}")
+
+    _threading.Thread(target=run, daemon=True).start()
+    return jsonify({"success": True, "job_id": did}), 202
+
+
+# ──────────────────────────────────────────────────────────────────
+#  YOUTUBE SEARCH — search by title, return video list
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/music/search", methods=["GET"])
+@jwt_required()
+def music_search_youtube():
+    """Search YouTube by query and return video list (for Add by Search UI)."""
+    q     = request.args.get("q", "").strip()
+    limit = int(request.args.get("limit", 10))
+    if not q:
+        return jsonify({"error": "q required"}), 400
+    if not YT_DLP_AVAILABLE:
+        return jsonify({"error": "yt-dlp not installed"}), 503
+
+    search_url = f"ytsearch{limit}:{q}"
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "ignoreerrors": True,
+        "extract_flat": True,
+        "noplaylist": True,
+    }
+
+    results = []
+    try:
+        with _yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(search_url, download=False)
+            entries = info.get("entries") or []
+            for entry in entries:
+                if not entry:
+                    continue
+                dur_s = entry.get("duration") or 0
+                m, s = divmod(int(dur_s), 60)
+                dur_str = f"{m}:{s:02d}" if dur_s else ""
+
+                thumbs = entry.get("thumbnails") or []
+                thumb_url = ""
+                if thumbs:
+                    mid = sorted(thumbs, key=lambda t: (t.get("width") or 0))
+                    # Pick medium-res thumbnail
+                    thumb_url = mid[len(mid) // 2].get("url", "")
+                elif entry.get("thumbnail"):
+                    thumb_url = entry["thumbnail"]
+
+                results.append({
+                    "id": entry.get("id", ""),
+                    "title": entry.get("title") or "Untitled",
+                    "url": entry.get("webpage_url") or f"https://youtube.com/watch?v={entry.get('id','')}",
+                    "thumbnail": thumb_url,
+                    "duration": dur_str,
+                    "uploader": entry.get("uploader") or entry.get("channel") or "",
+                })
+    except Exception as e:
+        logger.error(f"YT search error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"results": results, "count": len(results)}), 200
+
+
+# ──────────────────────────────────────────────────────────────────
+#  RENAME ARTIST — bulk rename all tracks by a given artist name
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/music/rename_artist", methods=["POST"])
+@jwt_required()
+def music_rename_artist():
+    """Rename all files from old_artist prefix to new_artist prefix."""
+    data       = request.get_json() or {}
+    old_artist   = data.get("old_artist", "").strip()  # empty string = Unknown Artist
+    new_artist   = data.get("new_artist", "").strip()
+    single_track = data.get("single_track", "").strip()  # if set, rename only this file
+    if not new_artist:
+        return jsonify({"error": "new_artist required"}), 400
+
+    renamed = []
+    errors  = []
+    audio_exts = {'.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac', '.opus', '.wma', '.webm'}
+
+    for f in MUSIC_DIR.iterdir():
+        if f.suffix.lower() not in audio_exts:
+            continue
+        stem = f.stem
+        # If single_track specified, only rename that file
+        if single_track and f.name != single_track:
+            continue
+        if old_artist == "":
+            # Unknown Artist: files with no " - " separator
+            if " - " not in stem:
+                new_stem = f"{new_artist} - {stem}"
+            else:
+                continue
+        else:
+            if stem.startswith(old_artist + " - "):
+                rest = stem[len(old_artist) + 3:]
+                new_stem = f"{new_artist} - {rest}"
+            else:
+                continue
+
+        new_stem = re.sub(r'[/\\:*?"<>|]', '_', new_stem).strip()
+        new_path = MUSIC_DIR / (new_stem + f.suffix)
+        if new_path.exists():
+            errors.append(f"{f.name}: destination exists")
+            continue
+        try:
+            f.rename(new_path)
+            renamed.append({"old": f.name, "new": new_path.name})
+            # Also rename matching .webp sidecar
+            webp_old = f.parent / (stem + ".webp")
+            webp_new = f.parent / (new_stem + ".webp")
+            if webp_old.exists() and not webp_new.exists():
+                webp_old.rename(webp_new)
+        except Exception as e:
+            errors.append(f"{f.name}: {e}")
+
+    return jsonify({"renamed": renamed, "errors": errors, "count": len(renamed)}), 200
+
+
+# ──────────────────────────────────────────────────────────────────
+#  COVER ART — save custom cover art for a track
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/music/cover", methods=["POST"])
+@jwt_required()
+def music_set_cover():
+    """Upload a custom cover image for a track (saves as .webp sidecar)."""
+    track_name = request.form.get("track_name", "").strip()
+    file = request.files.get("file")
+    if not track_name or not file:
+        return jsonify({"error": "track_name and file required"}), 400
+
+    base = re.sub(r'\.(mp3|flac|wav|ogg|m4a|aac|opus|wma|webm)$', '', track_name,
+                  flags=re.IGNORECASE)
+    webp_path = MUSIC_DIR / (base + ".webp")
+
+    try:
+        img = Image.open(io.BytesIO(file.read()))
+        img = img.convert("RGB")
+        img.thumbnail((600, 600), Image.Resampling.LANCZOS)
+        img.save(str(webp_path), "WEBP", quality=88)
+        return jsonify({"ok": True, "file": base + ".webp"}), 200
+    except Exception as e:
+        logger.error(f"cover art error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ──────────────────────────────────────────────────────────────────
+#  GLOBAL LIKES — aggregate likes across all users for "Most Liked" feature
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/music/popular", methods=["GET"])
+@jwt_required()
+def music_popular():
+    """Return tracks sorted by how many users have liked them."""
+    from collections import Counter
+    counts = Counter()
+    for uname, udata in user_manager.users.items():
+        favs = udata.get("music_favorites", [])
+        for f in favs:
+            counts[f] += 1
+    # Return top 20 with count > 0
+    top = [{"name": k, "likes": v} for k, v in counts.most_common(20) if v > 0]
+    return jsonify({"popular": top}), 200
 
 
 if __name__ == "__main__":
