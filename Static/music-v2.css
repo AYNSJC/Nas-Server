@@ -2258,3 +2258,802 @@
 .mp2-mob-nav-btn.active { color: var(--mp2-accent2); }
 .mp2-mob-nav-btn svg { transition: transform .15s; }
 .mp2-mob-nav-btn.active svg { transform: scale(1.1); }
+
+.mp2-song-card:hover { transform: translateY(-5px) scale(1.03); transition: 0.2s; }
+#mp2MobileNav { padding-bottom: env(safe-area-inset-bottom, 12px) !important; }
+
+/* ── PLAYLIST DRAG HANDLE & REMOVE BUTTON ─────────────── */
+.mp2-drag-handle {
+  cursor: grab;
+  color: var(--mp2-text3);
+  flex-shrink: 0;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  touch-action: none;
+  opacity: 0.5;
+  transition: opacity .15s;
+}
+.mp2-drag-handle:hover, .mp2-drag-handle:active { opacity: 1; }
+
+.mp2-pl-remove-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: rgba(248,113,113,0.08);
+  color: #f87171;
+  cursor: pointer;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all .15s;
+  opacity: 0.7;
+}
+.mp2-pl-remove-btn:hover, .mp2-pl-remove-btn:active {
+  opacity: 1;
+  background: rgba(248,113,113,0.18);
+}
+/* Always show remove button (not hover-only) */
+@media (hover: none) {
+  .mp2-pl-remove-btn { opacity: 1 !important; }
+}
+
+/* Drag state */
+.mp2-track-row.dragging { opacity: 0.4; }
+.mp2-track-row.drag-over { border-top: 2px solid var(--mp2-accent); }
+
+/* ── CD MODAL LYRICS BUTTON ─────────────────────────── */
+#mp2CDLyricsBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px;
+  height: 36px;
+  border-radius: 18px;
+  border: 1px solid var(--mp2-border);
+  transition: all .15s;
+}
+#mp2CDLyricsBtn:hover, #mp2CDLyricsBtn.active {
+  background: var(--mp2-surface2);
+  border-color: var(--mp2-accent);
+  color: var(--mp2-accent2);
+}
+
+/* ── CD MODAL RESPONSIVE LYRICS ────────────────────── */
+@media (max-width: 900px) {
+  #mp2CDModal .mp2-cd-content {
+    flex-wrap: wrap;
+    justify-content: center;
+    overflow-y: auto;
+    max-height: 100vh;
+  }
+  .mp2-cd-lyrics-panel {
+    width: 100%;
+    max-width: 100%;
+    min-width: unset;
+    height: 300px;
+  }
+}
+
+/* ── MOBILE: PROGRESS/VOLUME TOUCH TARGETS ──────────── */
+.mp2-progress {
+  padding: 12px 0;
+  margin: -12px 0;
+  box-sizing: content-box;
+  -webkit-tap-highlight-color: transparent;
+}
+.mp2-vol {
+  padding: 12px 0;
+  margin: -12px 0;
+  box-sizing: content-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Make progress thumb bigger on touch devices */
+@media (hover: none) {
+  .mp2-progress-thumb {
+    opacity: 1 !important;
+    width: 18px !important;
+    height: 18px !important;
+  }
+}
+
+/* ── CD MODAL SWIPE HINT ────────────────────────────── */
+.mp2-cd-swipe-hint {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: var(--mp2-text3);
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* ═══════════════════════════════════════════════════════
+   GEET v2 — UI OVERHAUL PATCH
+   Fixes: light mode, mobile layout, CD centering,
+   playlist collage slots, minimalistic refinements
+   ═══════════════════════════════════════════════════════ */
+
+/* ── Playlist collage slot (new) ──────────────────────── */
+.mp2-pl-collage-slot {
+  overflow: hidden;
+  background: var(--mp2-bg3);
+}
+.mp2-pl-cover-collage .mp2-pl-collage-slot {
+  width: 100%; height: 100%;
+}
+
+/* ── Mobile: fix bottom bar + content overlap ─────────── */
+@media (max-width: 600px) {
+  #mp2Layout {
+    height: calc(100vh - var(--mp2-player-h) - 52px); /* account for mobile nav */
+    overflow: hidden;
+  }
+  #mp2ViewContainer {
+    padding-bottom: 8px;
+  }
+  #mp2Main {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  #mp2BottomBar {
+    position: relative;
+    flex-shrink: 0;
+    /* Show track info + compact controls on one row on mobile */
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto;
+    height: auto;
+    padding: 8px 14px 10px;
+    gap: 0;
+    z-index: 20;
+  }
+  #mp2BottomBar .mp2-bar-controls {
+    display: none; /* hide center controls on mobile - use CD player */
+  }
+  #mp2BottomBar .mp2-bar-right {
+    display: flex !important;
+  }
+  #mp2BottomBar .mp2-bar-right .mp2-vol-wrap {
+    display: none; /* hide volume on mobile */
+  }
+  .mp2-bar-track {
+    min-width: 0;
+    flex: 1;
+  }
+  /* Mobile player bar: compact play/next buttons on right */
+  .mp2-bar-right {
+    gap: 2px !important;
+  }
+}
+
+/* ── Mobile nav: push content above bottom nav ─────────── */
+@media (max-width: 600px) {
+  #musicOverlay {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  #mp2Layout {
+    flex: 1;
+    min-height: 0;
+  }
+  #mp2MobileNav {
+    position: relative !important;
+    bottom: auto !important;
+    flex-shrink: 0;
+  }
+}
+
+/* ── CD Modal: properly centered ──────────────────────── */
+#mp2CDModal {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+#mp2CDModal .mp2-cd-content,
+.mp2-cd-content {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 56px;
+  max-width: 960px;
+  width: 100%;
+  padding: 0 48px;
+  position: relative;
+  z-index: 2;
+  box-sizing: border-box;
+}
+
+/* ── Light mode full overhaul ──────────────────────────── */
+[data-theme="light"] #musicOverlay {
+  background: linear-gradient(180deg, #f0eeff 0%, #f8f7ff 100%);
+}
+[data-theme="light"] #mp2Nav {
+  background: #ffffff;
+  border-right: 1px solid rgba(109,40,217,0.12);
+  box-shadow: 2px 0 12px rgba(109,40,217,0.05);
+}
+[data-theme="light"] .mp2-nav-logo {
+  color: #1a1730;
+}
+[data-theme="light"] .mp2-nav-btn {
+  color: #7c78a0;
+}
+[data-theme="light"] .mp2-nav-btn:hover {
+  background: rgba(109,40,217,0.06);
+  color: #3f3775;
+}
+[data-theme="light"] .mp2-nav-btn.active {
+  color: #6d28d9;
+  background: rgba(109,40,217,0.10);
+}
+[data-theme="light"] .mp2-nav-section-title {
+  color: #b0aed0;
+}
+[data-theme="light"] .mp2-nav-divider {
+  background: rgba(109,40,217,0.10);
+}
+[data-theme="light"] .mp2-nav-add-pl {
+  border-color: rgba(109,40,217,0.20);
+  color: #9d99c0;
+}
+[data-theme="light"] .mp2-nav-add-pl:hover {
+  color: #6d28d9;
+  border-color: #6d28d9;
+  background: rgba(109,40,217,0.05);
+}
+[data-theme="light"] .mp2-pl-sidebar-item {
+  color: #8886b0;
+}
+[data-theme="light"] .mp2-pl-sidebar-item:hover {
+  background: rgba(109,40,217,0.06);
+  color: #3f3775;
+}
+[data-theme="light"] .mp2-pl-sidebar-item.active {
+  color: #6d28d9;
+}
+[data-theme="light"] #mp2Main {
+  background: linear-gradient(180deg, rgba(109,40,217,0.08) 0%, transparent 200px);
+}
+[data-theme="light"] #mp2Header {
+  background: rgba(240,238,255,0.96);
+  border-bottom: 1px solid rgba(109,40,217,0.10);
+  backdrop-filter: blur(12px);
+}
+[data-theme="light"] .mp2-header-nav button {
+  background: rgba(109,40,217,0.07);
+  color: #5c5880;
+}
+[data-theme="light"] .mp2-header-nav button:hover {
+  background: rgba(109,40,217,0.13);
+}
+[data-theme="light"] .mp2-search-wrap input {
+  background: rgba(255,255,255,0.85);
+  border-color: rgba(109,40,217,0.15);
+  color: #1a1730;
+}
+[data-theme="light"] .mp2-search-wrap input::placeholder {
+  color: #b0aed0;
+}
+[data-theme="light"] .mp2-search-wrap input:focus {
+  background: #fff;
+  border-color: #6d28d9;
+  box-shadow: 0 0 0 3px rgba(109,40,217,0.10);
+}
+[data-theme="light"] .mp2-search-wrap svg {
+  color: #b0aed0;
+}
+[data-theme="light"] .mp2-btn-icon {
+  background: rgba(109,40,217,0.07);
+  color: #7c78a0;
+}
+[data-theme="light"] .mp2-btn-icon:hover {
+  background: rgba(109,40,217,0.13);
+  color: #3f3775;
+}
+[data-theme="light"] .mp2-home-greeting {
+  color: #1a1730;
+}
+[data-theme="light"] .mp2-section-title {
+  color: #1a1730;
+}
+[data-theme="light"] .mp2-section-see-all {
+  color: #b0aed0;
+}
+[data-theme="light"] .mp2-section-see-all:hover {
+  color: #6d28d9;
+}
+[data-theme="light"] .mp2-song-card,
+[data-theme="light"] .mp2-playlist-card {
+  background: transparent;
+}
+[data-theme="light"] .mp2-card-art {
+  background: linear-gradient(135deg, #ede9fe, #ddd6fe);
+  box-shadow: 0 4px 16px rgba(109,40,217,0.12);
+}
+[data-theme="light"] .mp2-pl-cover {
+  box-shadow: 0 4px 16px rgba(109,40,217,0.12);
+}
+[data-theme="light"] .mp2-artist-photo {
+  background: linear-gradient(135deg, #ede9fe, #ddd6fe);
+  box-shadow: 0 4px 16px rgba(109,40,217,0.12);
+  color: #6d28d9;
+}
+[data-theme="light"] .mp2-track-row {
+  border-radius: 10px;
+}
+[data-theme="light"] .mp2-track-row:hover {
+  background: rgba(109,40,217,0.06);
+}
+[data-theme="light"] .mp2-track-row.playing {
+  background: rgba(109,40,217,0.10);
+}
+[data-theme="light"] .mp2-tr-num {
+  color: #c0bed8;
+}
+[data-theme="light"] .mp2-tr-art {
+  background: #ede9fe;
+}
+[data-theme="light"] .mp2-tr-art-ph {
+  color: #a78bfa;
+}
+[data-theme="light"] .mp2-tr-title {
+  color: #1a1730;
+}
+[data-theme="light"] .mp2-tr-artist {
+  color: #9997bb;
+}
+[data-theme="light"] .mp2-tr-more,
+[data-theme="light"] .mp2-tr-fav {
+  color: #c0bed8;
+}
+[data-theme="light"] .mp2-tr-fav:hover {
+  color: var(--mp2-pink);
+}
+[data-theme="light"] #mp2BottomBar {
+  background: rgba(255,255,255,0.95);
+  border-top: 1px solid rgba(109,40,217,0.12);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 -4px 24px rgba(109,40,217,0.06);
+}
+[data-theme="light"] .mp2-bar-track-title {
+  color: #1a1730;
+}
+[data-theme="light"] .mp2-bar-track-artist {
+  color: #9997bb;
+}
+[data-theme="light"] .mp2-ctrl-btn {
+  color: #9997bb;
+}
+[data-theme="light"] .mp2-ctrl-btn:hover {
+  color: #3f3775;
+  background: rgba(109,40,217,0.08);
+}
+[data-theme="light"] .mp2-ctrl-btn.active {
+  color: #6d28d9;
+}
+[data-theme="light"] .mp2-play-btn {
+  background: #1a1730;
+  color: #fff;
+}
+[data-theme="light"] .mp2-progress {
+  background: rgba(109,40,217,0.12);
+}
+[data-theme="light"] .mp2-progress-fill {
+  background: #6d28d9;
+}
+[data-theme="light"] .mp2-progress:hover .mp2-progress-fill {
+  background: #7c3aed;
+}
+[data-theme="light"] .mp2-progress-thumb {
+  background: #6d28d9;
+}
+[data-theme="light"] .mp2-vol {
+  background: rgba(109,40,217,0.12);
+}
+[data-theme="light"] .mp2-vol-fill {
+  background: #a78bfa;
+}
+[data-theme="light"] .mp2-vol-wrap:hover .mp2-vol-fill {
+  background: #6d28d9;
+}
+[data-theme="light"] .mp2-time {
+  color: #b0aed0;
+}
+[data-theme="light"] #mp2CDModal {
+  background: linear-gradient(135deg, #f0eeff 0%, #faf9ff 50%, #ede8ff 100%);
+}
+[data-theme="light"] .mp2-cd-bg-img {
+  filter: blur(80px) saturate(2) brightness(0.7);
+  opacity: 0.25;
+}
+[data-theme="light"] .mp2-cd-close {
+  background: rgba(0,0,0,0.08);
+  color: #3f3775;
+}
+[data-theme="light"] .mp2-cd-close:hover {
+  background: rgba(0,0,0,0.14);
+}
+[data-theme="light"] .mp2-cd-badge {
+  color: #6d28d9;
+}
+[data-theme="light"] .mp2-cd-title {
+  color: #1a1730;
+}
+[data-theme="light"] .mp2-cd-artist {
+  color: #7c78a0;
+}
+[data-theme="light"] .mp2-vinyl-outer {
+  box-shadow: 0 20px 60px rgba(109,40,217,0.2), 0 0 0 1px rgba(109,40,217,0.1);
+}
+[data-theme="light"] .mp2-vinyl-label {
+  background: #ede9fe;
+}
+[data-theme="light"] .mp2-cd-play-btn {
+  background: #1a1730;
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+}
+[data-theme="light"] .mp2-cd-ctrl {
+  color: #9997bb;
+}
+[data-theme="light"] .mp2-cd-ctrl:hover {
+  color: #3f3775;
+  background: rgba(109,40,217,0.07);
+}
+[data-theme="light"] .mp2-cd-ctrl.active {
+  color: #6d28d9;
+}
+[data-theme="light"] .mp2-cd-lyrics-panel {
+  background: rgba(255,255,255,0.75);
+  border: 1px solid rgba(109,40,217,0.12);
+  backdrop-filter: blur(12px);
+}
+[data-theme="light"] .mp2-cd-lyrics-header {
+  border-bottom-color: rgba(109,40,217,0.10);
+}
+[data-theme="light"] .mp2-cd-lyrics-title {
+  color: #3f3775;
+}
+[data-theme="light"] .mp-lyric-line {
+  color: rgba(26,23,48,0.3);
+}
+[data-theme="light"] .mp-lyric-line:hover {
+  background: rgba(109,40,217,0.06);
+  color: rgba(26,23,48,0.65);
+}
+[data-theme="light"] .mp-lyric-line.active {
+  color: #3f3775;
+  background: rgba(109,40,217,0.10);
+  font-weight: 700;
+}
+[data-theme="light"] .mp-lyric-line.past {
+  color: rgba(26,23,48,0.18);
+}
+[data-theme="light"] .mp-lyric-line-plain {
+  color: rgba(26,23,48,0.70);
+}
+[data-theme="light"] .mp2-pl-detail-hero {
+  background: linear-gradient(180deg, rgba(109,40,217,0.10) 0%, transparent 100%);
+}
+[data-theme="light"] .mp2-pl-detail-cover {
+  background: linear-gradient(135deg, #ede9fe, #c4b5fd);
+  box-shadow: 0 8px 32px rgba(109,40,217,0.2);
+}
+[data-theme="light"] .mp2-pl-detail-name {
+  color: #1a1730;
+}
+[data-theme="light"] .mp2-pl-detail-label {
+  color: #b0aed0;
+}
+[data-theme="light"] .mp2-pl-detail-count {
+  color: #9997bb;
+}
+[data-theme="light"] .mp2-pl-play-btn {
+  background: #6d28d9;
+  box-shadow: 0 6px 20px rgba(109,40,217,0.30);
+}
+[data-theme="light"] .mp2-pl-add-songs-btn {
+  background: rgba(109,40,217,0.07);
+  border-color: rgba(109,40,217,0.15);
+  color: #6d28d9;
+}
+[data-theme="light"] .mp2-pl-add-songs-btn:hover {
+  background: rgba(109,40,217,0.12);
+  border-color: #6d28d9;
+}
+[data-theme="light"] .mp2-liked-hero {
+  background: linear-gradient(135deg, #ede9fe, #ddd6fe);
+}
+[data-theme="light"] .mp2-liked-hero-cover {
+  color: #6d28d9;
+}
+[data-theme="light"] .mp2-liked-hero-info h2 {
+  color: #1a1730;
+}
+[data-theme="light"] .mp2-liked-play {
+  background: #6d28d9;
+}
+[data-theme="light"] .mp2-artist-hero {
+  background: linear-gradient(180deg, rgba(109,40,217,0.12) 0%, transparent 100%);
+}
+[data-theme="light"] .mp2-artist-hero-name {
+  color: #1a1730;
+}
+[data-theme="light"] .mp2-ctx {
+  background: #fff;
+  border: 1px solid rgba(109,40,217,0.12);
+  box-shadow: 0 8px 32px rgba(109,40,217,0.12);
+}
+[data-theme="light"] .mp2-ctx-item {
+  color: #5c5880;
+}
+[data-theme="light"] .mp2-ctx-item:hover {
+  background: rgba(109,40,217,0.07);
+  color: #3f3775;
+}
+[data-theme="light"] .mp2-ctx-sep {
+  background: rgba(109,40,217,0.10);
+}
+[data-theme="light"] .mp2-empty-state {
+  color: #c0bed8;
+}
+[data-theme="light"] .mp2-empty-state h3 {
+  color: #7c78a0;
+}
+[data-theme="light"] .mp2-empty-state svg {
+  opacity: .3;
+}
+[data-theme="light"] .mp2-add-panel {
+  background: #ffffff;
+  border: 1px solid rgba(109,40,217,0.12);
+  box-shadow: 0 20px 60px rgba(109,40,217,0.12);
+}
+[data-theme="light"] .mp2-add-panel-overlay {
+  background: rgba(109,40,217,0.14);
+}
+[data-theme="light"] .mp2-panel-close {
+  background: rgba(109,40,217,0.07);
+  color: #7c78a0;
+}
+[data-theme="light"] .mp2-panel-close:hover {
+  background: rgba(109,40,217,0.13);
+  color: #3f3775;
+}
+[data-theme="light"] .mp2-panel-tab {
+  color: #9997bb;
+}
+[data-theme="light"] .mp2-panel-tab.active {
+  color: #6d28d9;
+  border-bottom-color: #6d28d9;
+  background: rgba(109,40,217,0.05);
+}
+[data-theme="light"] .mp2-form-input {
+  background: #f8f7ff;
+  border-color: rgba(109,40,217,0.15);
+  color: #1a1730;
+}
+[data-theme="light"] .mp2-form-input:focus {
+  background: #fff;
+  border-color: #6d28d9;
+  box-shadow: 0 0 0 3px rgba(109,40,217,0.08);
+}
+[data-theme="light"] .mp2-form-label {
+  color: #7c78a0;
+}
+[data-theme="light"] .mp2-fmt-btn {
+  border-color: rgba(109,40,217,0.15);
+  color: #7c78a0;
+}
+[data-theme="light"] .mp2-fmt-btn.active {
+  background: #6d28d9;
+  border-color: #6d28d9;
+  color: white;
+}
+[data-theme="light"] .mp2-drop-zone {
+  border-color: rgba(109,40,217,0.20);
+  color: #b0aed0;
+}
+[data-theme="light"] .mp2-drop-zone:hover, [data-theme="light"] .mp2-drop-zone.over {
+  background: rgba(109,40,217,0.05);
+  border-color: #6d28d9;
+  color: #6d28d9;
+}
+[data-theme="light"] .mp2-add-songs-panel {
+  background: #fff;
+  border: 1px solid rgba(109,40,217,0.12);
+}
+[data-theme="light"] .mp2-add-songs-search input {
+  background: #f8f7ff;
+  border-color: rgba(109,40,217,0.15);
+  color: #1a1730;
+}
+[data-theme="light"] .mp2-add-song-item:hover {
+  background: rgba(109,40,217,0.06);
+}
+[data-theme="light"] .mp2-browse-row {
+  border-bottom-color: rgba(109,40,217,0.08);
+}
+[data-theme="light"] .mp2-browse-row:hover {
+  background: rgba(109,40,217,0.06);
+}
+[data-theme="light"] .mp2-browse-row.selected {
+  background: rgba(109,40,217,0.10);
+}
+[data-theme="light"] #mp2CDLyricsBtn {
+  border-color: rgba(109,40,217,0.15);
+  color: #7c78a0;
+}
+[data-theme="light"] #mp2CDLyricsBtn:hover, [data-theme="light"] #mp2CDLyricsBtn.active {
+  background: rgba(109,40,217,0.08);
+  border-color: #6d28d9;
+  color: #6d28d9;
+}
+[data-theme="light"] #mp2MobileNav {
+  background: #fff;
+  border-top: 1px solid rgba(109,40,217,0.12);
+}
+[data-theme="light"] .mp2-mob-nav-btn {
+  color: #b0aed0;
+}
+[data-theme="light"] .mp2-mob-nav-btn.active {
+  color: #6d28d9;
+}
+[data-theme="light"] .mp2-drag-handle {
+  color: #c0bed8;
+}
+[data-theme="light"] .mp2-status-bar {
+  background: rgba(109,40,217,0.06);
+  color: #7c78a0;
+}
+
+/* ── Minimalist refinements (all themes) ──────────────── */
+
+/* Smoother card hover */
+.mp2-song-card,
+.mp2-artist-card,
+.mp2-playlist-card {
+  transition: transform .25s cubic-bezier(0.34,1.56,0.64,1);
+}
+
+/* Progress bar smooth */
+.mp2-progress-fill {
+  transition: width .1s linear, background .2s;
+}
+
+/* Bottom bar: more breathable */
+#mp2BottomBar {
+  padding: 0 24px;
+}
+
+/* Reduce nav visual weight */
+.mp2-nav-btn {
+  border-radius: 8px;
+  margin: 0 8px;
+  width: calc(100% - 16px);
+  transition: all .18s cubic-bezier(0.4,0,0.2,1);
+}
+.mp2-nav-btn.active {
+  border-radius: 8px;
+}
+
+/* Track row: slightly more padding */
+.mp2-track-row {
+  padding: 9px 12px;
+  transition: background .18s;
+}
+
+/* Scroll behavior smoother */
+#mp2ViewContainer {
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+}
+
+/* CD close button: cleaner */
+.mp2-cd-close {
+  border-radius: 12px;
+  width: 44px;
+  height: 44px;
+}
+
+/* Vinyl: add slight shadow glow when spinning */
+.mp2-vinyl.spinning {
+  filter: drop-shadow(0 0 30px rgba(124,58,237,0.3)) drop-shadow(0 20px 60px rgba(0,0,0,0.8));
+}
+
+/* Smooth transitions on all buttons */
+button, .mp2-ctrl-btn, .mp2-cd-ctrl, .mp2-play-btn, .mp2-cd-play-btn {
+  transition: all .18s cubic-bezier(0.4,0,0.2,1);
+}
+
+/* Mobile: view scrolls properly with bottom content visible */
+@media (max-width: 600px) {
+  #mp2ViewContainer {
+    overflow-y: scroll;
+    -webkit-overflow-scrolling: touch;
+  }
+  .mp2-section {
+    margin-bottom: 24px;
+  }
+  .mp2-home-greeting {
+    padding: 20px 16px 12px;
+    font-size: 24px;
+  }
+  .mp2-section-header {
+    padding: 0 16px 10px;
+  }
+  .mp2-scroll-row {
+    padding: 4px 16px 8px;
+    gap: 12px;
+  }
+  .mp2-track-list {
+    padding: 0 10px 16px;
+  }
+  /* Bigger card play overlay on mobile */
+  .mp2-card-play {
+    opacity: 0.75 !important;
+    transform: none !important;
+    width: 36px;
+    height: 36px;
+  }
+}
+
+/* Remove excessive drop shadows that add visual noise */
+.mp2-card-art {
+  box-shadow: 0 2px 12px rgba(0,0,0,0.25);
+}
+.mp2-pl-cover {
+  box-shadow: 0 2px 12px rgba(0,0,0,0.25);
+}
+.mp2-artist-photo {
+  box-shadow: 0 2px 12px rgba(0,0,0,0.25);
+}
+
+/* ── CD player: center content properly ────────────────── */
+#mp2CDModal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 1050;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+#mp2CDModal.open { display: flex; }
+
+/* Override the earlier conflicting rule */
+#mp2CDModal .mp2-cd-content {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 56px;
+  max-width: 960px;
+  width: 100%;
+  padding: 0 48px;
+  flex-wrap: nowrap;
+}
+
+@media (max-width: 900px) {
+  #mp2CDModal .mp2-cd-content {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 20px 24px;
+    overflow-y: auto;
+    max-height: 100vh;
+    flex-wrap: wrap;
+  }
+  .mp2-cd-info {
+    width: 100%;
+    max-width: 420px;
+  }
+}
+

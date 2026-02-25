@@ -41,9 +41,14 @@ const mpAudio2 = document.getElementById('mpAudio') || (() => {
 
 // ── Override old enterMusicMode ──────────────────────────────────────
 window.enterMusicMode = function () {
-  document.getElementById('musicOverlay').style.display = 'flex';
-  document.getElementById('musicOverlay').classList.add('open');
-  document.getElementById('mpMiniBar').style.display = 'none';
+  const ov = document.getElementById('musicOverlay');
+  if (!ov) return;
+  ov.style.display = 'flex';
+  ov.style.pointerEvents = '';
+  ov.style.zIndex = '999';
+  ov.classList.add('open');
+  const mb = document.getElementById('mpMiniBar');
+  if (mb) mb.style.display = 'none';
   document.body.classList.remove('mp-mini-active');
   mp2Init();
 };
@@ -88,7 +93,38 @@ async function mp2LoadTracks() {
     const res = await fetch('/api/music/tracks', { headers: { Authorization: 'Bearer ' + token } });
     if (!res.ok) return;
     const d = await safeJson(res);
-    mp2.tracks = d.tracks || [];
+    const allTracks = d.tracks || [];
+
+    // Identify and delete tracks with artist "NA" or "N/A" from server
+    const naTracks = allTracks.filter(t => {
+      const artist = mp2GuessArtist(t.name);
+      return artist === 'NA' || artist === 'N/A';
+    });
+    if (naTracks.length > 0) {
+      console.log(`[Geet] Removing ${naTracks.length} NA-artist tracks from server...`);
+      for (const t of naTracks) {
+        try {
+          await fetch('/api/music/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+            body: JSON.stringify({ name: t.name })
+          });
+          // Also remove matching webp
+          const base = t.name.replace(/\.(mp3|flac|wav|ogg|m4a|aac|opus|wma|webm)$/i, '');
+          await fetch('/api/music/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+            body: JSON.stringify({ name: base + '.webp' })
+          }).catch(() => {});
+        } catch {}
+      }
+    }
+
+    // Keep only non-NA tracks
+    mp2.tracks = allTracks.filter(t => {
+      const artist = mp2GuessArtist(t.name);
+      return artist !== 'NA' && artist !== 'N/A';
+    });
     // Also sync to old mp state so other parts of app still work
     if (window.mp) mp.tracks = mp2.tracks;
   } catch {}
@@ -105,7 +141,17 @@ function mp2SetGreeting() {
 // ── Close ─────────────────────────────────────────────────────────────
 function mp2Close() {
   const ov = document.getElementById('musicOverlay');
-  if (ov) { ov.style.display = 'none'; ov.classList.remove('open'); }
+  if (ov) {
+    ov.style.display = 'none';
+    ov.classList.remove('open');
+    // Reset z-index so it doesn't block storage UI
+    ov.style.zIndex = '';
+    ov.style.pointerEvents = 'none';
+  }
+  // Also close CD modal if open
+  const cd = document.getElementById('mp2CDModal');
+  if (cd) { cd.style.display = 'none'; cd.classList.remove('open'); }
+
   // Show mini bar if playing
   if (mp2.currentTrack && !mpAudio2.paused) {
     const mb = document.getElementById('mpMiniBar');
@@ -222,7 +268,18 @@ async function mp2GetArt(trackName) {
 }
 
 async function mp2GetArtistPhoto(artistName) {
+  if (!artistName || artistName === 'Unknown Artist') return null;
   if (mp2.artistArtCache[artistName] !== undefined) return mp2.artistArtCache[artistName];
+
+  // Check localStorage cache first
+  try {
+    const cached = localStorage.getItem('mp2_artist_' + artistName);
+    if (cached !== null) {
+      mp2.artistArtCache[artistName] = cached || null;
+      return cached || null;
+    }
+  } catch {}
+
   // Try to find from a track's thumbnail first
   const artistTracks = mp2.tracks.filter(t =>
     !/\.(webp)$/i.test(t.name) && mp2GuessArtist(t.name) === artistName
@@ -231,22 +288,46 @@ async function mp2GetArtistPhoto(artistName) {
     if (mp2TrackHasThumb(t.name)) {
       const url = mp2ThumbUrl(t.name);
       mp2.artistArtCache[artistName] = url;
+      try { localStorage.setItem('mp2_artist_' + artistName, url); } catch {}
       return url;
     }
   }
-  // iTunes artist search
+  // Primary: iTunes track search (much more reliable for artwork than artist entity search)
   try {
     const q = encodeURIComponent(artistName);
-    const res = await fetch(`https://itunes.apple.com/search?term=${q}&media=music&entity=musicArtist&limit=1`);
+    const res = await fetch(`https://itunes.apple.com/search?term=${q}&media=music&entity=song&limit=5`);
     if (!res.ok) throw new Error();
     const d = await res.json();
-    if (d.results && d.results.length > 0 && d.results[0].artworkUrl100) {
-      const url = d.results[0].artworkUrl100.replace('100x100bb', '600x600bb');
-      mp2.artistArtCache[artistName] = url;
-      return url;
+    if (d.results && d.results.length > 0) {
+      // Pick best result that matches artist name
+      let best = d.results[0];
+      for (const r of d.results) {
+        if ((r.artistName || '').toLowerCase().includes(artistName.toLowerCase()) ||
+            artistName.toLowerCase().includes((r.artistName || '').toLowerCase())) {
+          best = r; break;
+        }
+      }
+      if (best.artworkUrl100) {
+        const url = best.artworkUrl100.replace('100x100bb', '600x600bb');
+        mp2.artistArtCache[artistName] = url;
+        try { localStorage.setItem('mp2_artist_' + artistName, url); } catch {}
+        return url;
+      }
+    }
+  } catch {}
+  // Fallback: try art from local track sidecars or cached art
+  try {
+    for (const t of artistTracks.slice(0, 3)) {
+      const url = await mp2GetArt(t.name);
+      if (url) {
+        mp2.artistArtCache[artistName] = url;
+        try { localStorage.setItem('mp2_artist_' + artistName, url); } catch {}
+        return url;
+      }
     }
   } catch {}
   mp2.artistArtCache[artistName] = null;
+  try { localStorage.setItem('mp2_artist_' + artistName, ''); } catch {}
   return null;
 }
 
@@ -440,39 +521,47 @@ function mp2MakePlCard(pl) {
   playBtn.className = 'mp2-card-play';
   playBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>`;
 
-  const top4 = pl.tracks.slice(0, 4).filter(tn => mp2TrackHasThumb(tn));
-  if (top4.length >= 2) {
+  // Build collage from first 4 tracks - use webp sidecars if available, else iTunes
+  const audioTracks = pl.tracks.filter(tn => mp2.tracks.some(t => t.name === tn));
+  const top4 = audioTracks.slice(0, 4);
+
+  if (top4.length >= 1) {
     const coll = document.createElement('div');
     coll.className = 'mp2-pl-cover-collage';
-    top4.slice(0, 4).forEach(tn => {
-      const img = document.createElement('img');
-      img.src = mp2ThumbUrl(tn);
-      img.loading = 'lazy';
-      img.onerror = function() { this.style.display = 'none'; };
-      coll.appendChild(img);
-    });
-    // Fill remaining spots
-    for (let i = top4.length; i < 4; i++) {
-      const ph = document.createElement('div');
-      ph.style.cssText = 'background:var(--mp2-bg3);';
-      coll.appendChild(ph);
+    // Create 4 slots, fill async
+    const slots = [];
+    for (let i = 0; i < 4; i++) {
+      const slot = document.createElement('div');
+      slot.className = 'mp2-pl-collage-slot';
+      if (top4[i]) {
+        const img = document.createElement('img');
+        img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;';
+        img.loading = 'lazy';
+        slot.appendChild(img);
+        // Load art: webp sidecar first, else iTunes
+        const tn = top4[i];
+        if (mp2TrackHasThumb(tn)) {
+          img.src = mp2ThumbUrl(tn);
+        } else {
+          img.src = ''; // placeholder
+          mp2GetArt(tn).then(url => {
+            if (url) img.src = url;
+            else slot.style.background = 'var(--mp2-bg3)';
+          });
+        }
+      } else {
+        slot.style.background = 'var(--mp2-bg3)';
+      }
+      slots.push(slot);
+      coll.appendChild(slot);
     }
     coverDiv.appendChild(coll);
   } else {
+    // Empty playlist
     const single = document.createElement('div');
     single.className = 'mp2-pl-cover-single';
     single.innerHTML = `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1.5"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
     coverDiv.appendChild(single);
-    // Try to get art from first track
-    if (pl.tracks.length > 0) {
-      mp2GetArt(pl.tracks[0]).then(url => {
-        if (url) {
-          single.style.backgroundImage = `url(${url})`;
-          single.style.backgroundSize = 'cover';
-          single.innerHTML = '';
-        }
-      });
-    }
   }
   coverDiv.appendChild(playBtn);
 
@@ -683,20 +772,33 @@ function mp2RenderPlaylistDetail() {
   // Cover
   const coverEl = document.getElementById('mp2PlDetailCover');
   if (coverEl) {
-    const top4 = pl.tracks.slice(0, 4).filter(tn => mp2TrackHasThumb(tn));
-    if (top4.length >= 2) {
+    coverEl.innerHTML = '';
+    const audioTracks = pl.tracks.filter(tn => mp2.tracks.some(t => t.name === tn));
+    if (audioTracks.length >= 1) {
+      const top4 = audioTracks.slice(0, 4);
       const coll = document.createElement('div');
-      coll.className = 'collage';
       coll.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;width:100%;height:100%;';
-      top4.slice(0,4).forEach(tn => {
+      top4.forEach((tn, i) => {
+        const slot = document.createElement('div');
+        slot.style.cssText = 'background:var(--mp2-bg3);overflow:hidden;';
+        if (top4.length === 1) slot.style.gridColumn = '1/-1';
         const img = document.createElement('img');
-        img.src = mp2ThumbUrl(tn);
-        img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
+        img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;';
         img.loading = 'lazy';
-        img.onerror = () => img.style.display = 'none';
-        coll.appendChild(img);
+        slot.appendChild(img);
+        if (mp2TrackHasThumb(tn)) {
+          img.src = mp2ThumbUrl(tn);
+        } else {
+          mp2GetArt(tn).then(url => { if (url) img.src = url; });
+        }
+        coll.appendChild(slot);
       });
-      coverEl.innerHTML = '';
+      // Pad to 4 if fewer tracks
+      for (let i = top4.length; i < 4 && top4.length > 1; i++) {
+        const slot = document.createElement('div');
+        slot.style.background = 'var(--mp2-bg3)';
+        coll.appendChild(slot);
+      }
       coverEl.appendChild(coll);
     } else {
       coverEl.style.background = 'linear-gradient(135deg, var(--mp2-accent), #1e1a3a)';
@@ -729,13 +831,14 @@ function mp2RenderPlaylistDetail() {
 
     // Add drag-to-reorder handle
     const handle = document.createElement('div');
-    handle.style.cssText = 'cursor:grab;color:var(--mp2-text3);flex-shrink:0;padding:0 4px;';
+    handle.className = 'mp2-drag-handle';
     handle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="16" x2="20" y2="16"/></svg>`;
+    handle.title = 'Drag to reorder';
     row.insertBefore(handle, row.firstChild);
 
-    // Remove btn on rightclick
+    // Remove btn - always visible on mobile
     const removeBtn = document.createElement('button');
-    removeBtn.style.cssText = 'width:28px;height:28px;border:none;background:none;color:var(--mp2-text3);cursor:pointer;border-radius:50%;flex-shrink:0;opacity:0;transition:opacity .15s;';
+    removeBtn.className = 'mp2-pl-remove-btn';
     removeBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
     removeBtn.title = 'Remove from playlist';
     removeBtn.onclick = (e) => {
@@ -746,9 +849,10 @@ function mp2RenderPlaylistDetail() {
       mp2RenderNavPlaylists();
       showToast('Removed from playlist', 'success');
     };
-    row.addEventListener('mouseenter', () => removeBtn.style.opacity = '1');
-    row.addEventListener('mouseleave', () => removeBtn.style.opacity = '0');
     row.appendChild(removeBtn);
+
+    // Drag-to-reorder (mouse + touch)
+    mp2MakeDraggable(row, listEl, pl.id);
 
     listEl.appendChild(row);
   });
@@ -758,7 +862,7 @@ function mp2PlayActivePlaylist() {
   if (!mp2.activePl) return;
   const pl = mp2.playlists.find(p => p.id === mp2.activePl);
   if (!pl || !pl.tracks.length) return;
-  mp2PlayTrack(pl.tracks[0], 'playlist:' + pl.activePl);
+  mp2PlayTrack(pl.tracks[0], 'playlist:' + mp2.activePl);
 }
 
 function mp2DeleteActivePl() {
@@ -771,6 +875,99 @@ function mp2DeleteActivePl() {
   mp2RenderNavPlaylists();
   mp2GoView('playlists');
   showToast('Playlist deleted', 'success');
+}
+
+// ── DRAG TO REORDER (playlist tracks) ────────────────────────────────
+let _mp2DragSrc = null;
+function mp2MakeDraggable(row, container, plId) {
+  // Mouse drag
+  row.draggable = true;
+  row.addEventListener('dragstart', (e) => {
+    _mp2DragSrc = row;
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  row.addEventListener('dragend', () => {
+    row.classList.remove('dragging');
+    container.querySelectorAll('.mp2-track-row').forEach(r => r.classList.remove('drag-over'));
+    _mp2DragSrc = null;
+    mp2SaveReorderFromDOM(container, plId);
+  });
+  row.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    if (_mp2DragSrc && _mp2DragSrc !== row) {
+      container.querySelectorAll('.mp2-track-row').forEach(r => r.classList.remove('drag-over'));
+      row.classList.add('drag-over');
+    }
+  });
+  row.addEventListener('drop', (e) => {
+    e.preventDefault();
+    if (_mp2DragSrc && _mp2DragSrc !== row) {
+      const rows = [...container.querySelectorAll('.mp2-track-row')];
+      const srcIdx = rows.indexOf(_mp2DragSrc);
+      const tgtIdx = rows.indexOf(row);
+      if (srcIdx < tgtIdx) container.insertBefore(_mp2DragSrc, row.nextSibling);
+      else container.insertBefore(_mp2DragSrc, row);
+    }
+  });
+
+  // Touch drag (long press + move)
+  let touchTimeout = null;
+  let touchDragging = false;
+  let ghostEl = null;
+  row.addEventListener('touchstart', (e) => {
+    touchTimeout = setTimeout(() => {
+      touchDragging = true;
+      _mp2DragSrc = row;
+      row.classList.add('dragging');
+      // Create ghost
+      ghostEl = row.cloneNode(true);
+      ghostEl.style.cssText = 'position:fixed;opacity:0.7;pointer-events:none;z-index:9999;width:' + row.offsetWidth + 'px;background:var(--mp2-surface2);border-radius:8px;';
+      document.body.appendChild(ghostEl);
+    }, 300);
+  }, { passive: true });
+
+  row.addEventListener('touchmove', (e) => {
+    if (!touchDragging) { clearTimeout(touchTimeout); return; }
+    e.preventDefault();
+    const touch = e.touches[0];
+    if (ghostEl) { ghostEl.style.left = (touch.clientX - 80) + 'px'; ghostEl.style.top = (touch.clientY - 20) + 'px'; }
+    const els = document.elementsFromPoint(touch.clientX, touch.clientY);
+    const target = els.find(el => el.classList.contains('mp2-track-row') && el !== row);
+    container.querySelectorAll('.mp2-track-row').forEach(r => r.classList.remove('drag-over'));
+    if (target) target.classList.add('drag-over');
+  }, { passive: false });
+
+  row.addEventListener('touchend', (e) => {
+    clearTimeout(touchTimeout);
+    if (!touchDragging) return;
+    touchDragging = false;
+    if (ghostEl) { ghostEl.remove(); ghostEl = null; }
+    row.classList.remove('dragging');
+    const touch = e.changedTouches[0];
+    const els = document.elementsFromPoint(touch.clientX, touch.clientY);
+    const target = els.find(el => el.classList.contains('mp2-track-row') && el !== row);
+    container.querySelectorAll('.mp2-track-row').forEach(r => r.classList.remove('drag-over'));
+    if (target) {
+      const rows = [...container.querySelectorAll('.mp2-track-row')];
+      const srcIdx = rows.indexOf(row);
+      const tgtIdx = rows.indexOf(target);
+      if (srcIdx < tgtIdx) container.insertBefore(row, target.nextSibling);
+      else container.insertBefore(row, target);
+    }
+    _mp2DragSrc = null;
+    mp2SaveReorderFromDOM(container, plId);
+  });
+}
+
+function mp2SaveReorderFromDOM(container, plId) {
+  const pl = mp2.playlists.find(p => p.id === plId);
+  if (!pl) return;
+  const rows = [...container.querySelectorAll('.mp2-track-row')];
+  pl.tracks = rows.map(r => r.dataset.track).filter(Boolean);
+  mp2SavePrefs();
+  mp2RenderNavPlaylists();
+  showToast('Playlist reordered', 'success');
 }
 
 function mp2SavePlName() {
@@ -820,25 +1017,62 @@ function mp2PlayLiked() {
 function mp2RenderNavPlaylists() {
   const el = document.getElementById('mp2NavPlaylistList');
   if (!el) return;
-  el.innerHTML = mp2.playlists.map(pl => {
-    const top = pl.tracks.slice(0, 4).filter(tn => mp2TrackHasThumb(tn));
+  el.innerHTML = '';
+  mp2.playlists.forEach(pl => {
     const isActive = pl.id === mp2.activePl && mp2.currentView === 'playlist-detail';
-    let thumbHtml;
-    if (top.length >= 2) {
-      thumbHtml = `<div class="mp2-pl-sidebar-thumb"><div class="collage" style="display:grid;grid-template-columns:1fr 1fr;width:100%;height:100%;">
-        ${top.slice(0,4).map(tn => `<img src="${mp2ThumbUrl(tn)}" style="width:100%;height:100%;object-fit:cover;" loading="lazy" onerror="this.style.display='none'">`).join('')}
-      </div></div>`;
+    const item = document.createElement('div');
+    item.className = 'mp2-pl-sidebar-item' + (isActive ? ' active' : '');
+    item.onclick = () => { mp2.activePl = pl.id; mp2GoView('playlist-detail'); };
+
+    // Build thumb - try webp first, then async iTunes
+    const thumb = document.createElement('div');
+    thumb.className = 'mp2-pl-sidebar-thumb';
+    const audioTracks = pl.tracks.filter(tn => mp2.tracks.some(t => t.name === tn));
+    const withThumb = audioTracks.filter(tn => mp2TrackHasThumb(tn));
+    if (withThumb.length >= 2) {
+      const coll = document.createElement('div');
+      coll.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;width:100%;height:100%;overflow:hidden;';
+      withThumb.slice(0, 4).forEach(tn => {
+        const img = document.createElement('img');
+        img.src = mp2ThumbUrl(tn);
+        img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
+        img.loading = 'lazy';
+        coll.appendChild(img);
+      });
+      thumb.appendChild(coll);
+    } else if (audioTracks.length > 0) {
+      // Single or async - start with icon, replace async
+      thumb.style.cssText = 'background:linear-gradient(135deg,var(--mp2-accent),#1e1a3a);display:flex;align-items:center;justify-content:center;';
+      thumb.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/></svg>`;
+      // Load art for first track async
+      const firstTrack = audioTracks[0];
+      mp2GetArt(firstTrack).then(url => {
+        if (url) {
+          thumb.style.cssText = '';
+          thumb.innerHTML = '';
+          const img = document.createElement('img');
+          img.src = url;
+          img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:4px;';
+          thumb.appendChild(img);
+        }
+      });
     } else {
-      thumbHtml = `<div class="mp2-pl-sidebar-thumb" style="background:linear-gradient(135deg,var(--mp2-accent),#1e1a3a);display:flex;align-items:center;justify-content:center;">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/></svg>
-      </div>`;
+      thumb.style.cssText = 'background:linear-gradient(135deg,var(--mp2-accent),#1e1a3a);display:flex;align-items:center;justify-content:center;';
+      thumb.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/></svg>`;
     }
-    return `<div class="mp2-pl-sidebar-item${isActive ? ' active' : ''}" onclick="mp2.activePl='${escapeHtml(pl.id)}';mp2GoView('playlist-detail');">
-      ${thumbHtml}
-      <span class="mp2-pl-sidebar-name">${escapeHtml(pl.name)}</span>
-      <span class="mp2-pl-sidebar-count">${pl.tracks.length}</span>
-    </div>`;
-  }).join('');
+
+    const name = document.createElement('span');
+    name.className = 'mp2-pl-sidebar-name';
+    name.textContent = pl.name;
+    const count = document.createElement('span');
+    count.className = 'mp2-pl-sidebar-count';
+    count.textContent = pl.tracks.length;
+
+    item.appendChild(thumb);
+    item.appendChild(name);
+    item.appendChild(count);
+    el.appendChild(item);
+  });
 }
 
 // ── SEARCH ────────────────────────────────────────────────────────────
@@ -883,7 +1117,8 @@ function mp2BuildQueue(startName, context) {
 function mp2PlayTrack(trackName, context) {
   mp2BuildQueue(trackName, context || 'all');
   mp2Load(trackName);
-  mp2OpenCD();
+  // CD modal only opens when user explicitly clicks the album art / bar
+  // (do NOT auto-open here)
 }
 
 function mp2Load(trackName) {
@@ -935,15 +1170,24 @@ function mp2ToggleShuffle() {
 
 function mp2ToggleLoop() {
   mp2.loop = (mp2.loop + 1) % 3;
-  const loopLabel = ['Loop off', 'Loop all', 'Loop one'][mp2.loop];
-  const isActive  = mp2.loop > 0;
+  const labels = ['Loop off', 'Loop all', 'Loop one'];
+  // SVG for loop-all (repeat arrows)
+  const svgAll = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`;
+  // SVG for loop-one (repeat with "1" badge)
+  const svgOne = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg><span style="position:absolute;top:-3px;right:-3px;font-size:9px;font-weight:800;background:var(--mp2-accent);color:white;width:14px;height:14px;border-radius:50%;display:flex;align-items:center;justify-content:center;line-height:1;">1</span>`;
+  const svgOff = svgAll;
+
   ['mp2BtnLoop', 'mp2CDLoop'].forEach(id => {
     const el = document.getElementById(id);
     if (el) {
-      el.classList.toggle('active', isActive);
-      el.title = loopLabel;
-      // Show "1" indicator for loop-one
-      el.style.fontWeight = mp2.loop === 2 ? '900' : '';
+      el.classList.toggle('active', mp2.loop > 0);
+      el.title = labels[mp2.loop];
+      el.style.position = 'relative';
+      if (mp2.loop === 2) {
+        el.innerHTML = svgOne;
+      } else {
+        el.innerHTML = svgOff;
+      }
     }
   });
 }
@@ -1338,14 +1582,29 @@ async function mp2EnrichArtists() {
   const groups = {};
   mp2.tracks.filter(t => !/\.(webp)$/i.test(t.name)).forEach(t => {
     const a = mp2GuessArtist(t.name);
-    if (a) groups[a] = true;
+    if (a && a !== 'Unknown Artist') groups[a] = true;
   });
+  let found = 0;
   for (const artist of Object.keys(groups)) {
-    await mp2GetArtistPhoto(artist);
-    await new Promise(r => setTimeout(r, 300)); // rate limit
+    const url = await mp2GetArtistPhoto(artist);
+    if (url) {
+      found++;
+      // Update any visible artist cards
+      const phEl = document.getElementById(`mp2APhoto_${CSS.escape(artist)}`);
+      if (phEl) phEl.innerHTML = `<img src="${url}" alt="${escapeHtml(artist)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;" onerror="this.style.display='none'">`;
+    }
+    await new Promise(r => setTimeout(r, 200)); // rate limit
   }
-  mp2RenderAll();
-  showToast('Artist art loaded!', 'success');
+  // Also update artist hero if on artist detail view
+  if (mp2.currentView === 'artist-detail' && mp2.activeArtist) {
+    mp2GetArtistPhoto(mp2.activeArtist).then(url => {
+      if (url) {
+        const ph = document.getElementById('mp2ArtistHeroPhoto');
+        if (ph) ph.innerHTML = `<img src="${url}" alt="${escapeHtml(mp2.activeArtist)}" onerror="this.style.display='none'">`;
+      }
+    });
+  }
+  showToast(`Artist art loaded! (${found} found)`, 'success');
 }
 
 // ── ADD MUSIC PANEL ───────────────────────────────────────────────────
@@ -1792,22 +2051,51 @@ if (dz) {
   });
 }
 
-// Progress bar drag (mouse)
+// Progress bar drag (mouse + touch)
 function mp2MakeProgressDraggable(barId) {
   const bar = document.getElementById(barId);
   if (!bar) return;
   let dragging = false;
-  bar.addEventListener('mousedown', () => dragging = true);
-  document.addEventListener('mousemove', (e) => {
-    if (!dragging) return;
+
+  function seekFromEvent(clientX) {
     const rect = bar.getBoundingClientRect();
-    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     if (mpAudio2.duration) mpAudio2.currentTime = pct * mpAudio2.duration;
-  });
+  }
+
+  // Mouse
+  bar.addEventListener('mousedown', (e) => { dragging = true; seekFromEvent(e.clientX); });
+  document.addEventListener('mousemove', (e) => { if (!dragging) return; seekFromEvent(e.clientX); });
   document.addEventListener('mouseup', () => dragging = false);
+
+  // Touch
+  bar.addEventListener('touchstart', (e) => { dragging = true; seekFromEvent(e.touches[0].clientX); e.preventDefault(); }, { passive: false });
+  bar.addEventListener('touchmove', (e) => { if (!dragging) return; seekFromEvent(e.touches[0].clientX); e.preventDefault(); }, { passive: false });
+  bar.addEventListener('touchend', () => dragging = false);
 }
 mp2MakeProgressDraggable('mp2BarProgress');
 mp2MakeProgressDraggable('mp2CDProgress');
+
+// Volume bar touch support
+function mp2MakeVolumeTouchable(barId) {
+  const bar = document.getElementById(barId);
+  if (!bar) return;
+  function setVol(clientX) {
+    const rect = bar.getBoundingClientRect();
+    const v = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    mp2.muted = false;
+    mp2SetVolume(v);
+  }
+  let dragging = false;
+  bar.addEventListener('mousedown', (e) => { dragging = true; setVol(e.clientX); });
+  document.addEventListener('mousemove', (e) => { if (!dragging) return; setVol(e.clientX); });
+  document.addEventListener('mouseup', () => dragging = false);
+  bar.addEventListener('touchstart', (e) => { dragging = true; setVol(e.touches[0].clientX); e.preventDefault(); }, { passive: false });
+  bar.addEventListener('touchmove', (e) => { if (!dragging) return; setVol(e.touches[0].clientX); e.preventDefault(); }, { passive: false });
+  bar.addEventListener('touchend', () => dragging = false);
+}
+mp2MakeVolumeTouchable('mp2VolBar');
+mp2MakeVolumeTouchable('mp2CDVolBar');
 
 // ══════════════════════════════════════════════════════════════════
 //  LYRICS — fetch, render, sync (v2 — writes to #mpLyricsContent
@@ -1829,15 +2117,43 @@ function mp2ToggleLyricsPanel() {
   if (!panel) return;
   const isOpen = panel.classList.toggle('open');
   if (btn) btn.classList.toggle('active', isOpen);
-  // If opening, fetch lyrics for current track
+  // If opening, always fetch/show lyrics for current track
   if (isOpen) {
     const track = mp2.currentTrack || mp2Lyrics._pendingTrack;
-    if (track && mp2Lyrics.loadedFor !== track) {
-      mp2FetchLyrics(track);
+    if (track) {
+      // Always re-fetch for the current track (force re-fetch if different track)
+      if (mp2Lyrics.loadedFor !== track) {
+        mp2FetchLyrics(track);
+      } else {
+        // Already loaded, just start sync if synced
+        if (mp2Lyrics.synced && !mpAudio2.paused) mp2StartLyricSync();
+      }
     }
   } else {
     mp2StopLyricSync();
   }
+}
+
+// Background pre-fetch (doesn't update DOM unless panel is open)
+async function mp2FetchLyricsBackground(filename) {
+  if (!filename) return;
+  const title  = mp2GuessTitle(filename);
+  const artist = mp2GuessArtist(filename);
+  try {
+    const params = new URLSearchParams({ track_name: title });
+    if (artist) params.append('artist_name', artist);
+    const res = await fetch('/api/music/lyrics?' + params, {
+      headers: { Authorization: 'Bearer ' + (window.token || '') }
+    });
+    const data = await res.json();
+    if (data && data.found) {
+      mp2Lyrics.loadedFor = filename;
+      mp2Lyrics.synced = data.synced || false;
+      mp2Lyrics.lines  = data.lines  || [];
+      mp2Lyrics.plain  = data.lyrics || '';
+      mp2Lyrics._preloaded = true;
+    }
+  } catch {}
 }
 
 async function mp2FetchLyrics(filename) {
@@ -1846,63 +2162,80 @@ async function mp2FetchLyrics(filename) {
   const content = document.getElementById('mpLyricsContent');
   if (!content) return;
 
-  content.innerHTML = '<div class="mp2-lyrics-loading"><span class="mp2-lyrics-spinner"></span>Searching for lyrics…</div>';
+  content.innerHTML = '<div class="mp2-lyrics-loading" style="display:flex;align-items:center;gap:10px;padding:32px 20px;color:var(--mp2-text3);"><span class="mp2-lyrics-spinner"></span>Searching for lyrics…</div>';
 
-  const title  = mp2GuessTitle(filename);
-  const artist = mp2GuessArtist(filename);
+  const rawTitle  = mp2GuessTitle(filename);
+  const rawArtist = mp2GuessArtist(filename);
 
-  try {
-    const params = new URLSearchParams({ track_name: title });
-    if (artist) params.append('artist_name', artist);
-    const res = await fetch('/api/music/lyrics?' + params, {
-      headers: { Authorization: 'Bearer ' + (window.token || '') }
-    });
-    const data = await res.json();
+  // Clean title: remove [Official Video], (Lyrics), feat. etc.
+  const cleanTitle = rawTitle
+    .replace(/\s*[\(\[].*?[\)\]]/gi, '')
+    .replace(/\s*(official|video|audio|lyrics|hd|4k|mv|music|lyric video|ft\.?|feat\.?).*$/gi, '')
+    .trim();
 
-    if (!data || !data.found) {
-      content.innerHTML = `
-        <div class="mp2-lyrics-empty">
-          <div style="font-size:28px;margin-bottom:8px;">🎵</div>
-          <div style="font-weight:600;margin-bottom:4px;">No lyrics found</div>
-          <div style="font-size:12px;opacity:.6;">"${escapeHtml(title)}"${artist ? ' · ' + escapeHtml(artist) : ''}</div>
-          <div style="font-size:11px;opacity:.5;margin-top:10px;">Tip: rename files as<br><code style="background:rgba(255,255,255,.08);padding:2px 5px;border-radius:4px;">Artist - Song.mp3</code></div>
-        </div>`;
-      mp2Lyrics.synced = false; mp2Lyrics.lines = [];
-      return;
-    }
+  // Build search attempts in priority order
+  const attempts = [];
+  if (rawArtist && rawTitle) attempts.push({ track_name: rawTitle, artist_name: rawArtist });
+  if (rawArtist && cleanTitle && cleanTitle !== rawTitle) attempts.push({ track_name: cleanTitle, artist_name: rawArtist });
+  if (rawTitle) attempts.push({ track_name: rawTitle });
+  if (cleanTitle && cleanTitle !== rawTitle) attempts.push({ track_name: cleanTitle });
 
-    mp2Lyrics.synced = data.synced || false;
-    mp2Lyrics.lines  = data.lines  || [];
-    mp2Lyrics.plain  = data.lyrics || '';
-    mp2Lyrics.activeLine = -1;
+  let data = null;
+  for (const attempt of attempts) {
+    try {
+      const params = new URLSearchParams(attempt);
+      const res = await fetch('/api/music/lyrics?' + params, {
+        headers: { Authorization: 'Bearer ' + (window.token || '') }
+      });
+      if (!res.ok) continue;
+      const d = await res.json();
+      if (d && d.found) { data = d; break; }
+    } catch {}
+  }
 
-    const header = `<div class="mp-lyrics-meta">
-      <div class="mp-lyrics-meta-title">${escapeHtml(data.title || title)}</div>
-      ${data.artist ? `<div class="mp-lyrics-meta-artist">${escapeHtml(data.artist)}</div>` : ''}
+  if (!data || !data.found) {
+    content.innerHTML = `
+      <div class="mp2-lyrics-empty" style="display:flex;flex-direction:column;align-items:center;padding:40px 20px;text-align:center;color:var(--mp2-text3);gap:8px;">
+        <div style="font-size:32px;">🎵</div>
+        <div style="font-weight:600;color:var(--mp2-text2);">No lyrics found</div>
+        <div style="font-size:12px;opacity:.6;">"${escapeHtml(cleanTitle)}"${rawArtist ? ' · ' + escapeHtml(rawArtist) : ''}</div>
+        <div style="font-size:11px;opacity:.45;margin-top:8px;">Tip: name files as<br><code style="background:rgba(255,255,255,.07);padding:2px 6px;border-radius:4px;">Artist - Song.mp3</code></div>
+      </div>`;
+    mp2Lyrics.synced = false; mp2Lyrics.lines = [];
+    return;
+  }
+
+  mp2Lyrics.synced = data.synced || false;
+  mp2Lyrics.lines  = data.lines  || [];
+  mp2Lyrics.plain  = data.lyrics || '';
+  mp2Lyrics.activeLine = -1;
+
+  const header = `<div class="mp-lyrics-meta" style="padding:16px 16px 8px;border-bottom:1px solid var(--mp2-border);margin-bottom:4px;">
+    <div style="font-weight:700;font-size:14px;color:var(--mp2-text);">${escapeHtml(data.title || cleanTitle)}</div>
+    ${data.artist ? `<div style="font-size:12px;color:var(--mp2-text3);margin-top:2px;">${escapeHtml(data.artist)}</div>` : ''}
+    <div style="margin-top:6px;">
       ${data.synced
-        ? '<span class="mp-lyrics-badge">🎵 Synced</span>'
-        : '<span class="mp-lyrics-badge mp-lyrics-badge-plain">Plain text</span>'}
-    </div>`;
+        ? '<span style="font-size:10px;background:rgba(124,58,237,0.2);color:var(--mp2-accent2);padding:2px 8px;border-radius:10px;font-weight:600;letter-spacing:.5px;">🎵 SYNCED</span>'
+        : '<span style="font-size:10px;background:rgba(255,255,255,0.06);color:var(--mp2-text3);padding:2px 8px;border-radius:10px;">PLAIN TEXT</span>'}
+    </div>
+  </div>`;
 
-    if (data.synced && data.lines && data.lines.length > 0) {
-      const linesHtml = data.lines.map((l, i) =>
-        `<div class="mp-lyric-line" id="mpl${i}" data-ms="${l.time_ms}"
-              onclick="mpAudio2.currentTime=${l.time_ms / 1000}">${escapeHtml(l.text)}</div>`
-      ).join('');
-      content.innerHTML = header + `<div class="mp-lyric-lines" id="mpLyricLines">${linesHtml}</div>`;
-      const badge = document.getElementById('mp2LyricsSyncBadge');
-      if (badge) badge.style.display = 'inline';
-      if (!mpAudio2.paused) mp2StartLyricSync();
-    } else if (data.lyrics) {
-      const plainHtml = data.lyrics.split('\n').map(l =>
-        l.trim()
-          ? `<div class="mp-lyric-line-plain">${escapeHtml(l)}</div>`
-          : `<div class="mp-lyric-blank"></div>`
-      ).join('');
-      content.innerHTML = header + `<div class="mp-lyric-plain">${plainHtml}</div>`;
-    }
-  } catch (e) {
-    content.innerHTML = `<div class="mp2-lyrics-empty">⚠️ Could not load lyrics<br><small style="opacity:.5">${escapeHtml(e.message)}</small></div>`;
+  if (data.synced && data.lines && data.lines.length > 0) {
+    const linesHtml = data.lines.map((l, i) =>
+      `<div class="mp-lyric-line" id="mpl${i}" data-ms="${l.time_ms}"
+            onclick="mpAudio2.currentTime=${l.time_ms / 1000}">${escapeHtml(l.text)}</div>`
+    ).join('');
+    content.innerHTML = header + `<div class="mp-lyric-lines" id="mpLyricLines" style="padding:8px 0;">${linesHtml}</div>`;
+    const badge = document.getElementById('mp2LyricsSyncBadge');
+    if (badge) badge.style.display = 'inline';
+    if (!mpAudio2.paused) mp2StartLyricSync();
+  } else if (data.lyrics) {
+    const plainHtml = data.lyrics.split('\n').map(l =>
+      l.trim()
+        ? `<div class="mp-lyric-line-plain">${escapeHtml(l)}</div>`
+        : `<div style="height:12px;"></div>`
+    ).join('');
+    content.innerHTML = header + `<div class="mp-lyric-plain" style="padding:8px 0;">${plainHtml}</div>`;
   }
 }
 
@@ -1947,14 +2280,53 @@ mpAudio2.addEventListener('seeked', () => { mp2Lyrics.activeLine = -1; });
 
 // Override the window.mpFetchLyrics hook that mp2Load() calls
 window.mpFetchLyrics = function(trackName) {
-  // Only fetch if the CD lyrics panel is open (or preload silently)
   mp2Lyrics.loadedFor = null; // force re-fetch
+  mp2Lyrics._pendingTrack = trackName;
   const panel = document.getElementById('mp2CDLyricsPanel');
   if (panel && panel.classList.contains('open')) {
     mp2FetchLyrics(trackName);
-  } else {
-    // Preload silently so it's ready when user opens the panel
-    mp2Lyrics.loadedFor = null;
-    mp2Lyrics._pendingTrack = trackName;
+  }
+  // Pre-fetch silently in background so lyrics are ready when user opens panel
+  else {
+    setTimeout(() => {
+      if (mp2Lyrics.loadedFor !== trackName) {
+        mp2FetchLyricsBackground(trackName);
+      }
+    }, 800);
   }
 };
+
+/* --- UX UPGRADES --- */
+window.addEventListener('keydown', (e) => {
+    if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+    const a = document.getElementById('mpAudio');
+    if(e.code==='Space'){ e.preventDefault(); mp2TogglePlay(); }
+    if(e.code==='ArrowRight') a.currentTime += 10;
+    if(e.code==='ArrowLeft') a.currentTime -= 10;
+});
+function triggerHaptic() { if (navigator.vibrate) navigator.vibrate(12); }
+const _origPlay = window.mp2TogglePlay;
+window.mp2TogglePlay = function() { triggerHaptic(); return _origPlay(); };
+
+// ── SWIPE GESTURES ON CD MODAL ────────────────────────────────────────
+(function() {
+  let touchStartX = 0, touchStartY = 0;
+  const modal = document.getElementById('mp2CDModal');
+  if (!modal) return;
+
+  modal.addEventListener('touchstart', (e) => {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }, { passive: true });
+
+  modal.addEventListener('touchend', (e) => {
+    // Ignore if touch was on progress/volume bars
+    if (e.target.closest('.mp2-progress, .mp2-vol, .mp2-cd-lyrics-panel')) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    if (Math.abs(dx) < Math.abs(dy)) return; // Vertical swipe, ignore
+    if (Math.abs(dx) < 50) return; // Too small
+    if (dx < 0) { triggerHaptic(); mp2Next(); }   // Swipe left = next
+    else { triggerHaptic(); mp2Prev(); }            // Swipe right = prev
+  }, { passive: true });
+})();
