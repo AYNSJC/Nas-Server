@@ -65,11 +65,14 @@
           <input type="text" id="mp2SearchInput" placeholder="Search songs, artists…" oninput="mp2OnSearch()">
         </div>
         <div class="mp2-header-actions">
-          <button class="mp2-btn-icon" title="Scan library" onclick="mp2ScanLibrary()">
+          <button class="mp2-btn-icon mp2-admin-only" title="Scan library" onclick="mp2ScanLibrary()" style="display:none;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
           </button>
-          <button class="mp2-btn-icon" title="Find artist art" onclick="mp2EnrichArtists()">
+          <button class="mp2-btn-icon mp2-admin-only" title="Refresh artist images (admin)" onclick="mp2EnrichArtists()" style="display:none;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><circle cx="18" cy="8" r="2" fill="currentColor" stroke="none"/></svg>
+          </button>
+          <button class="mp2-btn-icon mp2-admin-only" title="Manage tracks folder (admin)" onclick="mp2OpenAdminPanel()" style="display:none;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
           </button>
           <button class="mp2-btn-add" onclick="mp2OpenAddPanel()">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -327,7 +330,7 @@
       </div>
     </div>
 
-    <!-- Lyrics Panel (toggle with the Lyrics button) -->
+    <!-- Lyrics Panel (overlay — does NOT shrink the CD content) -->
     <div class="mp2-cd-lyrics-panel" id="mp2CDLyricsPanel">
       <div class="mp2-cd-lyrics-header">
         <span class="mp2-cd-lyrics-title">Lyrics</span>
@@ -346,6 +349,39 @@
 
   </div>
 </div><!-- /mp2CDModal -->
+
+
+<!-- ══════════════════════════════════════════════════════════
+     ADMIN TRACKS MANAGER PANEL
+     ══════════════════════════════════════════════════════════ -->
+<div id="mp2AdminPanel" class="mp2-add-panel-overlay" style="display:none;" onclick="if(event.target===this)mp2CloseAdminPanel()">
+  <div class="mp2-add-panel" style="max-width:720px;">
+    <div class="mp2-add-panel-header">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      <h3>Admin — Tracks Folder</h3>
+      <button class="mp2-panel-close" onclick="mp2CloseAdminPanel()">×</button>
+    </div>
+    <div style="padding:12px 20px;border-bottom:1px solid var(--mp2-border);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <input type="text" id="mp2AdminSearch" placeholder="Filter files…" oninput="mp2AdminFilterFiles()"
+        style="flex:1;min-width:160px;background:var(--mp2-surface2);border:1px solid var(--mp2-border);border-radius:8px;color:var(--mp2-text);padding:7px 12px;font-size:13px;outline:none;">
+      <button class="mp2-btn-add" onclick="mp2AdminLoadFiles()" style="font-size:12px;padding:7px 14px;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        Refresh
+      </button>
+      <button onclick="mp2EnrichArtists()" style="background:var(--mp2-surface2);border:1px solid var(--mp2-border);border-radius:8px;color:var(--mp2-text2);padding:7px 14px;font-size:12px;cursor:pointer;">
+        🖼 Refresh Artist Images
+      </button>
+      <button onclick="mp2AdminFixNANames()" style="background:var(--mp2-surface2);border:1px solid var(--mp2-border);border-radius:8px;color:var(--mp2-text2);padding:7px 14px;font-size:12px;cursor:pointer;">
+        🔧 Fix NA Artist Names
+      </button>
+      <button onclick="mp2ScanLibrary()" style="background:var(--mp2-surface2);border:1px solid var(--mp2-border);border-radius:8px;color:var(--mp2-text2);padding:7px 14px;font-size:12px;cursor:pointer;">
+        🔄 Scan Library
+      </button>
+    </div>
+    <div style="padding:6px 20px;font-size:11px;color:var(--mp2-text3);" id="mp2AdminFileCount">Loading…</div>
+    <div id="mp2AdminFileList" style="flex:1;overflow-y:auto;max-height:50vh;"></div>
+  </div>
+</div>
 
 
 <!-- ══════════════════════════════════════════════════════════
@@ -468,6 +504,30 @@
 
 <!-- Context menu -->
 <div id="mp2Ctx" class="mp2-ctx" style="display:none;"></div>
+
+<!-- Mobile bottom nav (shown only on mobile via CSS) -->
+<nav id="mp2MobNav" style="display:none;">
+  <button class="mp2-mob-nav-btn active" onclick="mp2GoView('home');mp2MobNavActive(this)">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+    Home
+  </button>
+  <button class="mp2-mob-nav-btn" onclick="mp2GoView('songs');mp2MobNavActive(this)">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+    Songs
+  </button>
+  <button class="mp2-mob-nav-btn" onclick="mp2GoView('artists');mp2MobNavActive(this)">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+    Artists
+  </button>
+  <button class="mp2-mob-nav-btn" onclick="mp2GoView('playlists');mp2MobNavActive(this)">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/></svg>
+    Lists
+  </button>
+  <button class="mp2-mob-nav-btn" onclick="mp2GoView('liked');mp2MobNavActive(this)">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+    Liked
+  </button>
+</nav>
 
 <!-- Add-to-playlist modal -->
 <div id="mp2AddSongsModal" class="mp2-add-songs-modal" style="display:none;" onclick="if(event.target===this)this.style.display='none'">

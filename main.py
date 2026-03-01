@@ -2667,14 +2667,21 @@ def music_channel():
             _dl_status[did]["count"] = len(downloaded_files)
 
     def run():
-        tmpl = str(MUSIC_DIR / '%(artist)s - %(title)s.%(ext)s')
-        # Fallback template if no artist tag
+        # Use uploader/channel as artist when no embedded artist tag exists.
+        # yt-dlp %(artist)s falls back to "NA" when no music tag is set, which
+        # happens for virtually all T-Series / Bollywood / Indian label videos.
+        # %(artist,uploader)s uses uploader as fallback (yt-dlp 2022+)
         postproc = [{"key": "FFmpegExtractAudio", "preferredcodec": fmt,
                      "preferredquality": "192" if fmt == "mp3" else "0"}]
         if thumb:
             postproc += [{"key": "FFmpegMetadata"}]
             if fmt == "mp3":
                 postproc += [{"key": "EmbedThumbnail"}]
+
+        # outtmpl: %(artist,uploader)s — falls back to uploader when artist tag is absent/NA
+        # Strip "- Topic" suffix that YouTube auto-channels have via postprocessing step
+        tmpl = str(MUSIC_DIR / '%(artist,uploader)s - %(title)s.%(ext)s')
+
         opts = {
             "format": "bestaudio/best",
             "outtmpl": tmpl,
@@ -3064,44 +3071,11 @@ def music_download_status_alias(did):
     }), 200
 
 # ──────────────────────────────────────────────────────────────────
-#  LYRICS — proxy to lrclib.net (free, no API key needed)
+#  LYRICS — multi-source: lrclib.net → genius (unofficial) → none
 # ──────────────────────────────────────────────────────────────────
 
 import urllib.request as _urllib_req
 import urllib.parse   as _urllib_parse
-
-@app.route("/api/music/lyrics", methods=["GET"])
-@jwt_required()
-def music_lyrics():
-    track_name  = request.args.get("track_name",  "").strip()
-    artist_name = request.args.get("artist_name", "").strip()
-    if not track_name:
-        return jsonify({"found": False, "msg": "track_name required"}), 400
-    try:
-        params = {"track_name": track_name}
-        if artist_name:
-            params["artist_name"] = artist_name
-        url = "https://lrclib.net/api/search?" + _urllib_parse.urlencode(params)
-        req = _urllib_req.Request(url, headers={"User-Agent": "NAS-Music/1.0"})
-        with _urllib_req.urlopen(req, timeout=8) as r:
-            results = json.loads(r.read().decode())
-        if not results:
-            return jsonify({"found": False}), 200
-        best = results[0]
-        synced_raw = best.get("syncedLyrics", "") or ""
-        plain_raw  = best.get("plainLyrics",  "") or ""
-        if synced_raw:
-            return jsonify({"found": True, "synced": True,
-                            "lines": _parse_lrc(synced_raw), "lyrics": plain_raw,
-                            "title": best.get("trackName",""), "artist": best.get("artistName","")}), 200
-        elif plain_raw:
-            return jsonify({"found": True, "synced": False, "lines": [],
-                            "lyrics": plain_raw,
-                            "title": best.get("trackName",""), "artist": best.get("artistName","")}), 200
-        return jsonify({"found": False}), 200
-    except Exception as e:
-        logger.error(f"Lyrics error: {e}")
-        return jsonify({"found": False, "msg": str(e)}), 200
 
 
 def _parse_lrc(lrc_text):
@@ -3117,6 +3091,161 @@ def _parse_lrc(lrc_text):
             if text:
                 lines.append({"time_ms": ms, "text": text})
     return lines
+
+
+def _search_lrclib(track_name, artist_name=""):
+    """Search lrclib.net for lyrics. Returns dict or None."""
+    try:
+        params = {"track_name": track_name}
+        if artist_name:
+            params["artist_name"] = artist_name
+        url = "https://lrclib.net/api/search?" + _urllib_parse.urlencode(params)
+        req = _urllib_req.Request(url, headers={"User-Agent": "NAS-Music/1.0"})
+        with _urllib_req.urlopen(req, timeout=8) as r:
+            results = json.loads(r.read().decode())
+        if not results:
+            return None
+        best = results[0]
+        synced_raw = best.get("syncedLyrics", "") or ""
+        plain_raw  = best.get("plainLyrics",  "") or ""
+        if not synced_raw and not plain_raw:
+            return None
+        return {
+            "found": True,
+            "synced": bool(synced_raw),
+            "lines": _parse_lrc(synced_raw) if synced_raw else [],
+            "lyrics": plain_raw,
+            "title": best.get("trackName", ""),
+            "artist": best.get("artistName", ""),
+            "source": "lrclib",
+        }
+    except Exception:
+        return None
+
+
+def _search_genius(track_name, artist_name=""):
+    """
+    Unofficial Genius search — returns plain text lyrics.
+    Uses the public Genius search API (no key needed for search),
+    then fetches the lyrics page and strips HTML.
+    """
+    try:
+        import html as _html
+        query = f"{artist_name} {track_name}".strip() if artist_name else track_name
+        search_url = "https://genius.com/api/search/song?" + _urllib_parse.urlencode({
+            "q": query, "per_page": "3", "page": "1"
+        })
+        req = _urllib_req.Request(
+            search_url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; NAS-Music/1.0)",
+                "Accept": "application/json",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+        )
+        with _urllib_req.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read().decode())
+
+        hits = data.get("response", {}).get("sections", [{}])[0].get("hits", [])
+        if not hits:
+            return None
+
+        best = hits[0].get("result", {})
+        song_title  = best.get("title", "")
+        song_artist = best.get("artist_names", "")
+        lyrics_path = best.get("path", "")
+        if not lyrics_path:
+            return None
+
+        page_url = "https://genius.com" + lyrics_path
+        page_req = _urllib_req.Request(
+            page_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; NAS-Music/1.0)"}
+        )
+        with _urllib_req.urlopen(page_req, timeout=10) as r:
+            page_html = r.read().decode("utf-8", errors="replace")
+
+        # Extract lyrics containers (data-lyrics-container)
+        import re as _re
+        containers = _re.findall(
+            r'<div[^>]+data-lyrics-container[^>]*>(.*?)</div\s*>',
+            page_html, _re.DOTALL | _re.IGNORECASE
+        )
+        if not containers:
+            # Fallback: look for JSON-embedded lyrics
+            match = _re.search(r'"lyrics":\s*\{[^}]*"body":\s*\{"plain":\s*"((?:[^"\\]|\\.)*)"', page_html)
+            if match:
+                plain = match.group(1).encode().decode('unicode_escape')
+                return {"found": True, "synced": False, "lines": [], "lyrics": plain,
+                        "title": song_title, "artist": song_artist, "source": "genius"}
+            return None
+
+        # Strip HTML tags from lyrics containers
+        combined = "\n".join(containers)
+        # Replace <br> with newlines
+        combined = _re.sub(r'<br\s*/?>', '\n', combined, flags=_re.IGNORECASE)
+        # Remove all other tags
+        combined = _re.sub(r'<[^>]+>', '', combined)
+        # Decode HTML entities
+        plain = _html.unescape(combined).strip()
+        if len(plain) < 50:
+            return None
+
+        return {
+            "found": True, "synced": False, "lines": [], "lyrics": plain,
+            "title": song_title, "artist": song_artist, "source": "genius",
+        }
+    except Exception as ex:
+        logger.debug(f"Genius lyrics fetch error: {ex}")
+        return None
+
+
+@app.route("/api/music/lyrics", methods=["GET"])
+@jwt_required()
+def music_lyrics():
+    track_name  = request.args.get("track_name",  "").strip()
+    artist_name = request.args.get("artist_name", "").strip()
+    if not track_name:
+        return jsonify({"found": False, "msg": "track_name required"}), 400
+
+    # Clean track name for better matching
+    clean_title = re.sub(
+        r'\s*[\(\[].*?(official|video|audio|lyrics|hd|4k|mv|music|full\s*song|feat\.?|ft\.?).*?[\)\]]',
+        '', track_name, flags=re.IGNORECASE
+    ).strip() or track_name
+
+    # Build search attempts from highest to lowest confidence
+    attempts_lrc = []
+    if artist_name and track_name:
+        attempts_lrc.append((track_name, artist_name))
+    if artist_name and clean_title and clean_title != track_name:
+        attempts_lrc.append((clean_title, artist_name))
+    attempts_lrc.append((track_name, ""))
+    if clean_title != track_name:
+        attempts_lrc.append((clean_title, ""))
+
+    # 1. Try lrclib first (has synced lyrics, good for English)
+    for tn, an in attempts_lrc:
+        result = _search_lrclib(tn, an)
+        if result:
+            return jsonify(result), 200
+
+    # 2. Fallback: Genius (broader, better for Indian / world music)
+    genius_attempts = []
+    if artist_name:
+        genius_attempts.append((track_name, artist_name))
+        if clean_title != track_name:
+            genius_attempts.append((clean_title, artist_name))
+    genius_attempts.append((track_name, ""))
+    if clean_title != track_name:
+        genius_attempts.append((clean_title, ""))
+
+    for tn, an in genius_attempts:
+        result = _search_genius(tn, an)
+        if result:
+            return jsonify(result), 200
+
+    return jsonify({"found": False}), 200
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -3169,7 +3298,8 @@ def music_download_batch():
         if artist:
             tmpl = str(MUSIC_DIR / f'{artist} - %(title)s.%(ext)s')
         else:
-            tmpl = str(MUSIC_DIR / '%(artist)s - %(title)s.%(ext)s')
+            # %(artist,uploader)s: uses uploader when no music artist tag
+            tmpl = str(MUSIC_DIR / '%(artist,uploader)s - %(title)s.%(ext)s')
         postproc = [{"key": "FFmpegExtractAudio", "preferredcodec": fmt,
                      "preferredquality": "192" if fmt == "mp3" else "0"}]
         if thumb:
@@ -3364,6 +3494,166 @@ def music_popular():
     # Return top 20 with count > 0
     top = [{"name": k, "likes": v} for k, v in counts.most_common(20) if v > 0]
     return jsonify({"popular": top}), 200
+
+
+# ──────────────────────────────────────────────────────────────────
+#  ADMIN CHECK — returns whether current user is admin
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/music/is_admin", methods=["GET"])
+@jwt_required()
+def music_is_admin():
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+    is_admin = user and user.get("role") == "admin"
+    return jsonify({"is_admin": is_admin}), 200
+
+
+# ──────────────────────────────────────────────────────────────────
+#  TRACKS FOLDER MANAGER — admin only
+# ──────────────────────────────────────────────────────────────────
+
+def _require_admin():
+    username = get_jwt_identity()
+    user = user_manager.get_user(username)
+    if not user or user.get("role") != "admin":
+        return False
+    return True
+
+
+@app.route("/api/music/admin/tracks", methods=["GET"])
+@jwt_required()
+def music_admin_list_tracks():
+    """List ALL files in tracks folder (including webp sidecars) — admin only."""
+    if not _require_admin():
+        return jsonify({"error": "Admin only"}), 403
+    try:
+        files = []
+        for f in MUSIC_DIR.iterdir():
+            if f.is_file():
+                st = f.stat()
+                files.append({
+                    "name": f.name,
+                    "size": st.st_size,
+                    "size_fmt": _music_size_fmt(st.st_size),
+                    "modified": st.st_mtime,
+                    "ext": f.suffix.lower().lstrip('.'),
+                    "is_audio": f.suffix.lstrip('.').lower() in MUSIC_EXTENSIONS,
+                })
+        files.sort(key=lambda x: x["name"].lower())
+        return jsonify({"files": files, "count": len(files)}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/music/admin/rename", methods=["POST"])
+@jwt_required()
+def music_admin_rename():
+    """Rename any file in tracks folder — admin only."""
+    if not _require_admin():
+        return jsonify({"error": "Admin only"}), 403
+    data = request.get_json() or {}
+    old  = data.get("old_name", "").strip()
+    new  = data.get("new_name", "").strip()
+    if not old or not new:
+        return jsonify({"error": "Both names required"}), 400
+    old_path = _safe_music_path(old)
+    if not old_path or not old_path.exists():
+        return jsonify({"error": "File not found"}), 404
+    _, ext = os.path.splitext(old)
+    if not os.path.splitext(new)[1]:
+        new += ext
+    safe_new = re.sub(r'[/\\:*?"<>|]', '_', new).strip()
+    new_path = _safe_music_path(safe_new)
+    if not new_path:
+        return jsonify({"error": "Invalid name"}), 400
+    if new_path.exists():
+        return jsonify({"error": "Name already exists"}), 409
+    old_path.rename(new_path)
+    # Also rename matching .webp sidecar if renaming audio file
+    old_stem = old_path.stem
+    new_stem = new_path.stem
+    webp_old = MUSIC_DIR / (old_stem + ".webp")
+    webp_new = MUSIC_DIR / (new_stem + ".webp")
+    if webp_old.exists() and not webp_new.exists():
+        webp_old.rename(webp_new)
+    return jsonify({"msg": "Renamed", "new_name": new_path.name}), 200
+
+
+@app.route("/api/music/admin/delete", methods=["DELETE"])
+@jwt_required()
+def music_admin_delete():
+    """Delete any file in tracks folder — admin only."""
+    if not _require_admin():
+        return jsonify({"error": "Admin only"}), 403
+    data = request.get_json() or {}
+    fname = data.get("filename", "").strip()
+    path  = _safe_music_path(fname) if fname else None
+    if not path or not path.exists():
+        return jsonify({"error": "Not found"}), 404
+    path.unlink()
+    # Also remove .webp sidecar if deleting audio
+    stem = Path(fname).stem
+    webp = MUSIC_DIR / (stem + ".webp")
+    if webp.exists():
+        webp.unlink()
+    return jsonify({"msg": "Deleted"}), 200
+
+
+@app.route("/api/music/admin/fix_artist_names", methods=["POST"])
+@jwt_required()
+def music_admin_fix_artist_names():
+    """
+    Admin-only: scan all tracks and rename files where artist is 'NA', 'N/A',
+    or empty — replacing with the uploader/channel name embedded in the file
+    or a user-supplied default.  Runs synchronously (small library) or in
+    background for large ones.
+    """
+    if not _require_admin():
+        return jsonify({"error": "Admin only"}), 403
+
+    data = request.get_json() or {}
+    default_artist = data.get("default_artist", "").strip()  # fallback if still unknown
+
+    audio_exts = {'.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac', '.opus', '.wma', '.webm'}
+    renamed = []
+    errors  = []
+
+    for f in list(MUSIC_DIR.iterdir()):
+        if not f.is_file() or f.suffix.lower() not in audio_exts:
+            continue
+        stem = f.stem
+        # Detect "NA - Song Title" or "N/A - Song Title" patterns
+        if ' - ' in stem:
+            artist_part = stem.split(' - ', 1)[0].strip()
+            if artist_part.upper() not in ('NA', 'N/A', 'NONE', 'UNKNOWN', ''):
+                continue  # Artist looks fine
+            title_part  = stem.split(' - ', 1)[1].strip()
+        else:
+            # No separator at all — whole name is title
+            title_part  = stem
+            artist_part = ''
+
+        # Use default_artist if provided, else keep "Unknown Artist"
+        new_artist = default_artist or "Unknown Artist"
+        new_stem   = re.sub(r'[/\\:*?"<>|]', '_', f"{new_artist} - {title_part}").strip()
+        new_path   = MUSIC_DIR / (new_stem + f.suffix)
+
+        if new_path.exists() and new_path != f:
+            errors.append(f"{f.name}: destination exists")
+            continue
+        try:
+            f.rename(new_path)
+            renamed.append({"old": f.name, "new": new_path.name})
+            # Rename .webp sidecar
+            webp_old = MUSIC_DIR / (stem + ".webp")
+            webp_new = MUSIC_DIR / (new_stem + ".webp")
+            if webp_old.exists() and not webp_new.exists():
+                webp_old.rename(webp_new)
+        except Exception as ex:
+            errors.append(f"{f.name}: {ex}")
+
+    return jsonify({"renamed": renamed, "errors": errors, "count": len(renamed)}), 200
 
 
 if __name__ == "__main__":

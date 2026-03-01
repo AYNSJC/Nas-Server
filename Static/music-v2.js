@@ -57,15 +57,36 @@ window.exitMusicMode = mp2Close;
 
 // ── Init ─────────────────────────────────────────────────────────────
 let _mp2Initialized = false;
+let _mp2IsAdmin = false;
+
+async function mp2CheckAdmin() {
+  try {
+    const res = await fetch('/api/music/is_admin', { headers: { Authorization: 'Bearer ' + token } });
+    if (res.ok) {
+      const d = await safeJson(res);
+      _mp2IsAdmin = d.is_admin || false;
+    }
+  } catch {}
+}
+
+function mp2ApplyAdminUI() {
+  // Show/hide admin-only elements
+  document.querySelectorAll('.mp2-admin-only').forEach(el => {
+    el.style.display = _mp2IsAdmin ? '' : 'none';
+  });
+}
+
 async function mp2Init() {
   if (_mp2Initialized) { mp2RenderAll(); return; }
   _mp2Initialized = true;
   await mp2LoadPrefs();
   await mp2LoadTracks();
+  await mp2CheckAdmin();
   mp2SetVolume(mp2.volume);
   mp2BindAudio();
   mp2RenderAll();
   mp2SetGreeting();
+  mp2ApplyAdminUI();
 }
 
 async function mp2LoadPrefs() {
@@ -267,20 +288,22 @@ async function mp2GetArt(trackName) {
   return null;
 }
 
-async function mp2GetArtistPhoto(artistName) {
+async function mp2GetArtistPhoto(artistName, forceRefresh) {
   if (!artistName || artistName === 'Unknown Artist') return null;
-  if (mp2.artistArtCache[artistName] !== undefined) return mp2.artistArtCache[artistName];
+  if (!forceRefresh && mp2.artistArtCache[artistName] !== undefined) return mp2.artistArtCache[artistName];
 
-  // Check localStorage cache first
-  try {
-    const cached = localStorage.getItem('mp2_artist_' + artistName);
-    if (cached !== null) {
-      mp2.artistArtCache[artistName] = cached || null;
-      return cached || null;
-    }
-  } catch {}
+  // Check localStorage cache first — skip network unless forceRefresh
+  if (!forceRefresh) {
+    try {
+      const cached = localStorage.getItem('mp2_artist_' + artistName);
+      if (cached !== null) {
+        mp2.artistArtCache[artistName] = cached || null;
+        return cached || null;
+      }
+    } catch {}
+  }
 
-  // Try to find from a track's thumbnail first
+  // Try to find from a track's thumbnail first (always use this — it's local)
   const artistTracks = mp2.tracks.filter(t =>
     !/\.(webp)$/i.test(t.name) && mp2GuessArtist(t.name) === artistName
   );
@@ -292,6 +315,14 @@ async function mp2GetArtistPhoto(artistName) {
       return url;
     }
   }
+
+  // Only fetch from iTunes if forceRefresh is set (admin triggered)
+  if (!forceRefresh) {
+    // Return null — don't fetch externally on every page load
+    mp2.artistArtCache[artistName] = null;
+    return null;
+  }
+
   // Primary: iTunes track search (much more reliable for artwork than artist entity search)
   try {
     const q = encodeURIComponent(artistName);
@@ -1137,11 +1168,14 @@ function mp2Load(trackName) {
 
 function mp2Next() {
   if (!mp2.queue.length) return;
-  if (mp2.loop === 2) { mpAudio2.currentTime = 0; mpAudio2.play(); return; }
+  if (mp2.loop === 2) { mpAudio2.currentTime = 0; mpAudio2.play().catch(()=>{}); return; }
   let next = mp2.queueIdx + 1;
   if (next >= mp2.queue.length) {
-    if (mp2.loop === 1) next = 0;
-    else return;
+    if (mp2.loop === 1) {
+      next = 0; // wrap around
+    } else {
+      return; // no loop, stop
+    }
   }
   mp2.queueIdx = next;
   mp2Load(mp2.queue[next]);
@@ -1261,7 +1295,15 @@ function mp2SeekClick(e) {
 
 // ── AUDIO EVENTS ──────────────────────────────────────────────────────
 function mp2BindAudio() {
-  mpAudio2.addEventListener('ended', () => mp2Next());
+  mpAudio2.addEventListener('ended', () => {
+    if (mp2.loop === 2) {
+      // Loop one: restart current track
+      mpAudio2.currentTime = 0;
+      mpAudio2.play().catch(()=>{});
+    } else {
+      mp2Next();
+    }
+  });
   mpAudio2.addEventListener('play',  () => mp2UpdatePlayState());
   mpAudio2.addEventListener('pause', () => mp2UpdatePlayState());
   mpAudio2.addEventListener('timeupdate', mp2OnTimeUpdate);
@@ -1577,8 +1619,20 @@ async function mp2ScanLibrary() {
 }
 
 async function mp2EnrichArtists() {
-  showToast('🔍 Looking up artist art… this may take a minute', 'info');
-  // Trigger artist art prefetch for all artists
+  if (!_mp2IsAdmin) { showToast('Admin only', 'error'); return; }
+  showToast('🔍 Refreshing artist images… this may take a minute', 'info');
+  // Clear existing localStorage cache so we fetch fresh images
+  try {
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('mp2_artist_')) keysToRemove.push(k);
+    }
+    keysToRemove.forEach(k => localStorage.removeItem(k));
+  } catch {}
+  mp2.artistArtCache = {};
+
+  // Force-fetch for all artists
   const groups = {};
   mp2.tracks.filter(t => !/\.(webp)$/i.test(t.name)).forEach(t => {
     const a = mp2GuessArtist(t.name);
@@ -1586,25 +1640,25 @@ async function mp2EnrichArtists() {
   });
   let found = 0;
   for (const artist of Object.keys(groups)) {
-    const url = await mp2GetArtistPhoto(artist);
+    const url = await mp2GetArtistPhoto(artist, true); // forceRefresh
     if (url) {
       found++;
       // Update any visible artist cards
       const phEl = document.getElementById(`mp2APhoto_${CSS.escape(artist)}`);
       if (phEl) phEl.innerHTML = `<img src="${url}" alt="${escapeHtml(artist)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;" onerror="this.style.display='none'">`;
     }
-    await new Promise(r => setTimeout(r, 200)); // rate limit
+    await new Promise(r => setTimeout(r, 300)); // rate limit
   }
   // Also update artist hero if on artist detail view
   if (mp2.currentView === 'artist-detail' && mp2.activeArtist) {
-    mp2GetArtistPhoto(mp2.activeArtist).then(url => {
+    mp2GetArtistPhoto(mp2.activeArtist, true).then(url => {
       if (url) {
         const ph = document.getElementById('mp2ArtistHeroPhoto');
         if (ph) ph.innerHTML = `<img src="${url}" alt="${escapeHtml(mp2.activeArtist)}" onerror="this.style.display='none'">`;
       }
     });
   }
-  showToast(`Artist art loaded! (${found} found)`, 'success');
+  showToast(`Artist images refreshed! (${found} found)`, 'success');
 }
 
 // ── ADD MUSIC PANEL ───────────────────────────────────────────────────
@@ -2307,6 +2361,134 @@ window.addEventListener('keydown', (e) => {
 function triggerHaptic() { if (navigator.vibrate) navigator.vibrate(12); }
 const _origPlay = window.mp2TogglePlay;
 window.mp2TogglePlay = function() { triggerHaptic(); return _origPlay(); };
+
+// ── ADMIN TRACKS MANAGER ─────────────────────────────────────────────────
+
+function mp2OpenAdminPanel() {
+  if (!_mp2IsAdmin) { showToast('Admin only', 'error'); return; }
+  const panel = document.getElementById('mp2AdminPanel');
+  if (panel) {
+    panel.style.display = 'flex';
+    mp2AdminLoadFiles();
+  }
+}
+
+function mp2CloseAdminPanel() {
+  const panel = document.getElementById('mp2AdminPanel');
+  if (panel) panel.style.display = 'none';
+}
+
+let _mp2AdminFiles = [];
+let _mp2AdminSearch = '';
+
+async function mp2AdminLoadFiles() {
+  const listEl = document.getElementById('mp2AdminFileList');
+  if (!listEl) return;
+  listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--mp2-text3)"><div class="mp2-status-spin"></div> Loading…</div>';
+  try {
+    const res = await fetch('/api/music/admin/tracks', { headers: { Authorization: 'Bearer ' + token } });
+    const d = await safeJson(res);
+    _mp2AdminFiles = d.files || [];
+    mp2AdminRenderFiles();
+    const countEl = document.getElementById('mp2AdminFileCount');
+    if (countEl) countEl.textContent = `${_mp2AdminFiles.filter(f=>f.is_audio).length} tracks, ${_mp2AdminFiles.length} total files`;
+  } catch (e) {
+    listEl.innerHTML = `<div style="padding:20px;text-align:center;color:#f87171;">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function mp2AdminRenderFiles() {
+  const listEl = document.getElementById('mp2AdminFileList');
+  if (!listEl) return;
+  const q = _mp2AdminSearch.toLowerCase();
+  const filtered = q ? _mp2AdminFiles.filter(f => f.name.toLowerCase().includes(q)) : _mp2AdminFiles;
+
+  if (!filtered.length) {
+    listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--mp2-text3);">No files found</div>';
+    return;
+  }
+
+  listEl.innerHTML = '';
+  filtered.forEach(f => {
+    const row = document.createElement('div');
+    row.className = 'mp2-admin-file-row';
+    const isAudio = f.is_audio;
+    row.innerHTML = `
+      <div class="mp2-admin-file-icon">${isAudio
+        ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--mp2-accent)" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>'
+        : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--mp2-text3)" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/></svg>'
+      }</div>
+      <div class="mp2-admin-file-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+      <div class="mp2-admin-file-size">${f.size_fmt}</div>
+      <div class="mp2-admin-file-actions">
+        <button class="mp2-admin-btn" onclick="mp2AdminRenameFile('${escapeHtml(f.name)}')" title="Rename">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+        <button class="mp2-admin-btn danger" onclick="mp2AdminDeleteFile('${escapeHtml(f.name)}')" title="Delete">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
+        </button>
+      </div>`;
+    listEl.appendChild(row);
+  });
+}
+
+function mp2AdminFilterFiles() {
+  _mp2AdminSearch = document.getElementById('mp2AdminSearch')?.value || '';
+  mp2AdminRenderFiles();
+}
+
+async function mp2AdminRenameFile(oldName) {
+  const newName = prompt(`Rename "${oldName}" to:`, oldName);
+  if (!newName || newName === oldName) return;
+  try {
+    const res = await fetch('/api/music/admin/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ old_name: oldName, new_name: newName })
+    });
+    const d = await safeJson(res);
+    if (!res.ok) throw new Error(d.error || d.msg || 'Rename failed');
+    showToast(`Renamed to ${d.new_name}`, 'success');
+    await mp2AdminLoadFiles();
+    await mp2LoadTracks();
+    mp2RenderAll();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function mp2AdminDeleteFile(filename) {
+  if (!confirm(`Delete "${filename}"?\n\nThis cannot be undone.`)) return;
+  try {
+    const res = await fetch('/api/music/admin/delete', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ filename })
+    });
+    const d = await safeJson(res);
+    if (!res.ok) throw new Error(d.error || d.msg || 'Delete failed');
+    showToast('File deleted', 'success');
+    await mp2AdminLoadFiles();
+    await mp2LoadTracks();
+    mp2RenderAll();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function mp2AdminFixNANames() {
+  const defaultArtist = prompt('Enter default artist name for unknown tracks (leave blank to use "Unknown Artist"):') ?? null;
+  if (defaultArtist === null) return; // cancelled
+  try {
+    const res = await fetch('/api/music/admin/fix_artist_names', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ default_artist: defaultArtist })
+    });
+    const d = await safeJson(res);
+    if (!res.ok) throw new Error(d.error || 'Failed');
+    showToast(`Fixed ${d.count} filename(s)`, 'success');
+    await mp2AdminLoadFiles();
+    await mp2LoadTracks();
+    mp2RenderAll();
+  } catch (e) { showToast(e.message, 'error'); }
+}
 
 // ── SWIPE GESTURES ON CD MODAL ────────────────────────────────────────
 (function() {

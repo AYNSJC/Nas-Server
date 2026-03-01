@@ -1729,39 +1729,44 @@
 
 /* ── LYRICS PANEL IN CD MODAL ─────────────────────────────── */
 
-/* Make CD modal content area flex-row to fit lyrics beside vinyl+info */
+/* CD modal content stays the same, lyrics slides in as overlay */
 #mp2CDModal .mp2-cd-content {
   display: flex;
   flex-direction: row;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: center;
   gap: 40px;
   padding: 40px 48px;
-  max-width: 1100px;
+  max-width: 900px;
   width: 100%;
   position: relative;
-  transition: all .35s ease;
+  transition: none;
 }
 
-/* Lyrics panel — hidden by default, slides in */
+/* Lyrics panel — absolutely positioned overlay on the right; never squishes content */
 .mp2-cd-lyrics-panel {
   display: none;
   flex-direction: column;
-  width: 320px;
-  min-width: 280px;
-  max-width: 360px;
-  height: 480px;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 16px;
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 340px;
+  max-width: 90vw;
+  height: 100vh;
+  background: rgba(14,12,28,0.98);
+  border-left: 1px solid rgba(255,255,255,0.08);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  z-index: 10100;
   overflow: hidden;
-  flex-shrink: 0;
+  box-shadow: -8px 0 32px rgba(0,0,0,0.4);
   animation: lyricsSlideIn .3s ease;
 }
 .mp2-cd-lyrics-panel.open {
   display: flex;
 }
 @keyframes lyricsSlideIn {
-  from { opacity: 0; transform: translateX(24px); }
+  from { opacity: 0; transform: translateX(40px); }
   to   { opacity: 1; transform: translateX(0); }
 }
 
@@ -3057,3 +3062,156 @@ button, .mp2-ctrl-btn, .mp2-cd-ctrl, .mp2-play-btn, .mp2-cd-play-btn {
   }
 }
 
+
+/* ── FIX: Lyrics panel is now a fixed overlay — remove conflicting mobile rules */
+@media (max-width: 900px) {
+  .mp2-cd-lyrics-panel {
+    width: 100%;
+    max-width: 100%;
+    min-width: unset;
+    height: 100vh;
+    left: 0;
+    right: 0;
+    border-left: none;
+    border-top: 1px solid rgba(255,255,255,0.08);
+  }
+  @keyframes lyricsSlideIn {
+    from { opacity: 0; transform: translateY(30px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+}
+
+/* ── ADMIN FILE MANAGER ──────────────────────────────────────── */
+.mp2-admin-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 20px;
+  border-bottom: 1px solid var(--mp2-border);
+  font-size: 13px;
+  transition: background .1s;
+}
+.mp2-admin-file-row:hover { background: var(--mp2-surface2); }
+.mp2-admin-file-icon { flex-shrink: 0; width: 20px; display: flex; align-items: center; justify-content: center; }
+.mp2-admin-file-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mp2-text);
+}
+.mp2-admin-file-size { color: var(--mp2-text3); font-size: 11px; flex-shrink: 0; min-width: 55px; text-align: right; }
+.mp2-admin-file-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.mp2-admin-btn {
+  background: none;
+  border: 1px solid var(--mp2-border);
+  border-radius: 6px;
+  color: var(--mp2-text2);
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  transition: all .15s;
+}
+.mp2-admin-btn:hover { background: var(--mp2-surface2); color: var(--mp2-text); }
+.mp2-admin-btn.danger:hover { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.4); color: #f87171; }
+
+/* ── MOBILE UI IMPROVEMENTS ──────────────────────────────────── */
+@media (max-width: 600px) {
+  /* Bottom bar on mobile — simplified, bigger touch targets */
+  #mp2BottomBar {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  .mp2-bar-btns { gap: 6px; }
+  .mp2-ctrl-btn { width: 34px; height: 34px; }
+  .mp2-play-btn { width: 42px; height: 42px; }
+  .mp2-bar-track { min-width: 0; flex: 1; }
+  .mp2-bar-track-title { font-size: 12px; }
+  .mp2-bar-track-artist { font-size: 10px; }
+  .mp2-bar-art { width: 40px; height: 40px; border-radius: 8px; }
+
+  /* View container has padding for mobile bottom bar */
+  #mp2ViewContainer { padding-bottom: 76px; }
+
+  /* Header simplified on mobile */
+  #mp2Header { padding: 10px 12px; gap: 8px; }
+  .mp2-header-nav { display: none; }
+  .mp2-search-wrap { flex: 1; }
+  .mp2-header-actions { gap: 4px; }
+  .mp2-header-actions .mp2-btn-icon { display: none !important; }
+  /* Always show Add Music and Close on mobile */
+  .mp2-header-actions .mp2-btn-add { display: flex !important; }
+  .mp2-header-actions button:last-child { display: flex !important; }
+
+  /* Mobile nav bar at bottom */
+  #mp2MobNav {
+    display: flex;
+    position: fixed;
+    bottom: 68px;
+    left: 0;
+    right: 0;
+    background: rgba(12,13,26,0.97);
+    border-top: 1px solid var(--mp2-border);
+    backdrop-filter: blur(16px);
+    z-index: 900;
+    padding: 4px 0 env(safe-area-inset-bottom, 4px);
+  }
+  .mp2-mob-nav-btn {
+    flex: 1;
+    background: none;
+    border: none;
+    color: var(--mp2-text3);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 8px 4px;
+    font-size: 9px;
+    transition: color .15s;
+    font-family: inherit;
+    line-height: 1;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mp2-mob-nav-btn.active { color: var(--mp2-accent); }
+  .mp2-mob-nav-btn svg { flex-shrink: 0; }
+
+  /* Songs list on mobile — full width rows */
+  .mp2-track-row { padding: 10px 12px; }
+  .mp2-tr-num { display: none; }
+
+  /* Scroll rows on mobile */
+  .mp2-scroll-row { gap: 10px; padding: 4px 12px 10px; }
+  .mp2-song-card { width: 130px; }
+  .mp2-card-art { width: 130px; height: 130px; }
+
+  /* Artist grid */
+  .mp2-artist-card { width: 100px; }
+  .mp2-artist-photo { width: 100px; height: 100px; }
+
+  /* CD modal mobile */
+  .mp2-cd-title { font-size: 20px; }
+  .mp2-cd-artist { font-size: 13px; }
+  .mp2-cd-controls { gap: 14px; }
+  .mp2-cd-ctrl { width: 38px; height: 38px; }
+  .mp2-cd-play-btn { width: 60px; height: 60px; }
+  .mp2-vinyl { width: 200px !important; height: 200px !important; }
+  .mp2-vinyl-outer { width: 200px !important; height: 200px !important; }
+}
+
+/* Safe area support for newer phones */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  @media (max-width: 600px) {
+    #mp2BottomBar { padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
+  }
+}
+
+/* Show mobile nav on small screens */
+@media (max-width: 600px) {
+  #mp2MobNav { display: flex !important; }
+  /* Extra padding so bottom bar doesn't cover mobile nav */
+  #mp2BottomBar { bottom: calc(52px + env(safe-area-inset-bottom, 0px)); }
+}
