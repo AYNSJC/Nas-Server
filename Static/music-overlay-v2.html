@@ -71,8 +71,8 @@
           <button class="mp2-btn-icon mp2-admin-only" title="Refresh artist images (admin)" onclick="mp2EnrichArtists()" style="display:none;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><circle cx="18" cy="8" r="2" fill="currentColor" stroke="none"/></svg>
           </button>
-          <button class="mp2-btn-icon mp2-admin-only" title="Manage tracks folder (admin)" onclick="mp2OpenAdminPanel()" style="display:none;">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          <button class="mp2-btn-icon mp2-admin-only" title="Tracks Folder (admin)" onclick="mp2OpenAdminPanel()" id="mp2BtnManageTracks" style="display:none;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
           </button>
           <button class="mp2-btn-add" onclick="mp2OpenAddPanel()">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -357,8 +357,8 @@
 <div id="mp2AdminPanel" class="mp2-add-panel-overlay" style="display:none;" onclick="if(event.target===this)mp2CloseAdminPanel()">
   <div class="mp2-add-panel" style="max-width:720px;">
     <div class="mp2-add-panel-header">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-      <h3>Admin — Tracks Folder</h3>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      <h3>Tracks Folder</h3>
       <button class="mp2-panel-close" onclick="mp2CloseAdminPanel()">×</button>
     </div>
     <div style="padding:12px 20px;border-bottom:1px solid var(--mp2-border);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -368,13 +368,19 @@
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
         Refresh
       </button>
-      <button onclick="mp2EnrichArtists()" style="background:var(--mp2-surface2);border:1px solid var(--mp2-border);border-radius:8px;color:var(--mp2-text2);padding:7px 14px;font-size:12px;cursor:pointer;">
+      <button class="mp2-admin-panel-only" onclick="mp2RefreshEverything()" style="background:linear-gradient(135deg,#7c3aed,#4f46e5);border:none;border-radius:8px;color:#fff;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer;" title="Scan + reload tracks + refresh artist images — all at once">
+        ⚡ Refresh Everything
+      </button>
+      <button class="mp2-admin-panel-only" onclick="mp2EnrichArtists()" style="background:var(--mp2-surface2);border:1px solid var(--mp2-border);border-radius:8px;color:var(--mp2-text2);padding:7px 14px;font-size:12px;cursor:pointer;">
         🖼 Refresh Artist Images
       </button>
-      <button onclick="mp2AdminFixNANames()" style="background:var(--mp2-surface2);border:1px solid var(--mp2-border);border-radius:8px;color:var(--mp2-text2);padding:7px 14px;font-size:12px;cursor:pointer;">
+      <button class="mp2-admin-panel-only" onclick="mp2AdminFindAllArtists()" style="background:var(--mp2-surface2);border:1px solid var(--mp2-border);border-radius:8px;color:var(--mp2-text2);padding:7px 14px;font-size:12px;cursor:pointer;" title="MusicBrainz search — works on any track, not just NA">
+        🔎 Find All Artists (MB)
+      </button>
+      <button class="mp2-admin-panel-only" onclick="mp2AdminFixNANames()" style="background:var(--mp2-surface2);border:1px solid var(--mp2-border);border-radius:8px;color:var(--mp2-text2);padding:7px 14px;font-size:12px;cursor:pointer;">
         🔧 Fix NA Artist Names
       </button>
-      <button onclick="mp2ScanLibrary()" style="background:var(--mp2-surface2);border:1px solid var(--mp2-border);border-radius:8px;color:var(--mp2-text2);padding:7px 14px;font-size:12px;cursor:pointer;">
+      <button class="mp2-admin-panel-only" onclick="mp2ScanLibrary()" style="background:var(--mp2-surface2);border:1px solid var(--mp2-border);border-radius:8px;color:var(--mp2-text2);padding:7px 14px;font-size:12px;cursor:pointer;">
         🔄 Scan Library
       </button>
     </div>

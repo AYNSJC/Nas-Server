@@ -55,24 +55,89 @@ window.enterMusicMode = function () {
 
 window.exitMusicMode = mp2Close;
 
+// ── PWA: inject manifest + theme-color into <head> if not already present ────
+(function mp2InjectPWAMeta() {
+  if (!document.querySelector('link[rel="manifest"]')) {
+    const link = document.createElement('link');
+    link.rel = 'manifest';
+    link.href = '/manifest.json';
+    document.head.appendChild(link);
+  }
+  if (!document.querySelector('meta[name="theme-color"]')) {
+    const meta = document.createElement('meta');
+    meta.name = 'theme-color';
+    meta.content = '#7c3aed';
+    document.head.appendChild(meta);
+  }
+  if (!document.querySelector('meta[name="apple-mobile-web-app-capable"]')) {
+    const m1 = document.createElement('meta');
+    m1.name = 'apple-mobile-web-app-capable';
+    m1.content = 'yes';
+    document.head.appendChild(m1);
+    const m2 = document.createElement('meta');
+    m2.name = 'apple-mobile-web-app-status-bar-style';
+    m2.content = 'black-translucent';
+    document.head.appendChild(m2);
+    const m3 = document.createElement('meta');
+    m3.name = 'apple-mobile-web-app-title';
+    m3.content = 'Resonance';
+    document.head.appendChild(m3);
+  }
+  // Apple touch icon
+  if (!document.querySelector('link[rel="apple-touch-icon"]')) {
+    const icon = document.createElement('link');
+    icon.rel = 'apple-touch-icon';
+    icon.href = '/static/icons/icon-192.png';
+    document.head.appendChild(icon);
+  }
+  // Generate icons if they haven't been created yet (one-time background fetch)
+  fetch('/static/icons/icon-192.png', { method: 'HEAD' }).then(r => {
+    if (!r.ok) fetch('/generate-icons').catch(() => {});
+  }).catch(() => {});
+})();
+
 // ── Init ─────────────────────────────────────────────────────────────
 let _mp2Initialized = false;
 let _mp2IsAdmin = false;
 
 async function mp2CheckAdmin() {
   try {
-    const res = await fetch('/api/music/is_admin', { headers: { Authorization: 'Bearer ' + token } });
+    const tok = window.token || localStorage.getItem('token') || '';
+    const res = await fetch('/api/music/is_admin', {
+      headers: { Authorization: 'Bearer ' + tok }
+    });
     if (res.ok) {
       const d = await safeJson(res);
       _mp2IsAdmin = d.is_admin || false;
+    } else {
+      console.warn('[Resonance] is_admin check failed:', res.status);
     }
-  } catch {}
+  } catch (e) {
+    console.warn('[Resonance] is_admin fetch error:', e);
+  }
 }
 
 function mp2ApplyAdminUI() {
-  // Show/hide admin-only elements
   document.querySelectorAll('.mp2-admin-only').forEach(el => {
-    el.style.display = _mp2IsAdmin ? '' : 'none';
+    if (_mp2IsAdmin) {
+      // Header icon buttons are display:flex; inline items are inline-flex
+      // Use the tag's natural display based on what it is
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'button' || tag === 'div') {
+        // Check CSS to decide: header buttons use flex, inline chips use inline-flex
+        const cs = window.getComputedStyle(el);
+        // If it was hidden by inline style, restore based on class
+        if (el.classList.contains('mp2-btn-icon') || el.classList.contains('mp2-btn-add')) {
+          el.style.display = 'flex';
+        } else {
+          el.style.display = 'inline-flex';
+        }
+      } else {
+        el.style.display = '';
+      }
+    } else {
+      el.style.display = 'none';
+    }
   });
 }
 
@@ -375,14 +440,55 @@ async function mp2LoadArt(trackName, imgEl, phEl) {
 // ── Name helpers ──────────────────────────────────────────────────────
 function mp2GuessTitle(filename) {
   let n = filename.replace(/\.(mp3|flac|wav|ogg|m4a|aac|opus|wma|webm)$/i, '');
-  if (n.includes(' - ')) return n.split(' - ').slice(1).join(' - ').trim();
-  return n;
+  if (n.includes(' - ')) {
+    const artistPart = n.split(' - ')[0].trim();
+    const titlePart  = n.split(' - ').slice(1).join(' - ').trim();
+    if (/^(na|n\/a|none|unknown|unknown artist)$/i.test(artistPart)) {
+      // NA prefix — title is everything after it; strip any detected artist name from title
+      return _mp2StripArtistFromTitle(titlePart);
+    }
+    return titlePart;
+  }
+  // No separator — try to strip any known artist name that appears inside the stem
+  return _mp2StripArtistFromTitle(n);
+}
+
+// Remove a detected artist name from a title string so lyrics search gets a clean song title
+function _mp2StripArtistFromTitle(title) {
+  const detect = typeof mp2DetectArtistInTitle === 'function' ? mp2DetectArtistInTitle : null;
+  if (!detect) return title;
+  const artist = detect(title);
+  if (!artist) return title;
+  // Build all aliases for this artist and remove them from the title
+  const aliases = _mp2ArtistAliases
+    .filter(([, canonical]) => canonical === artist)
+    .map(([alias]) => alias);
+  let t = title;
+  for (const alias of aliases) {
+    const esc = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    t = t.replace(new RegExp('(?<![a-z0-9])' + esc + '(?![a-z0-9])', 'gi'), '').trim();
+  }
+  // Clean up leftover separators: " - ", " | ", leading/trailing punctuation
+  t = t.replace(/^\s*[-|,·]+\s*|\s*[-|,·]+\s*$/g, '').replace(/\s{2,}/g, ' ').trim();
+  return t || title; // fallback to original if we stripped everything
 }
 
 function mp2GuessArtist(filename) {
   const n = filename.replace(/\.(mp3|flac|wav|ogg|m4a|aac|opus|wma|webm)$/i, '');
-  if (n.includes(' - ')) return n.split(' - ')[0].trim();
-  return '';
+  if (n.includes(' - ')) {
+    const artist = n.split(' - ')[0].trim();
+    // Treat NA / N/A / None / Unknown as no artist
+    if (/^(na|n\/a|none|unknown|unknown artist)$/i.test(artist)) {
+      // Artist part is NA — try to detect from the title side
+      const titlePart = n.split(' - ').slice(1).join(' - ').trim();
+      return mp2DetectArtistInTitle ? (mp2DetectArtistInTitle(titlePart) || mp2DetectArtistInTitle(n) || '') : '';
+    }
+    return artist;
+  }
+  // No " - " separator — try to detect artist anywhere in the full stem
+  // mp2DetectArtistInTitle is defined later in this file; use window fallback for safety
+  const detect = typeof mp2DetectArtistInTitle === 'function' ? mp2DetectArtistInTitle : null;
+  return detect ? (detect(n) || '') : '';
 }
 
 // ── HOME VIEW ─────────────────────────────────────────────────────────
@@ -1564,6 +1670,10 @@ function mp2ShowCtx(e, trackName) {
     </button>
     ${plItems.length ? `<div class="mp2-ctx-sep"></div>${plItems}` : ''}
     <div class="mp2-ctx-sep"></div>
+    <button class="mp2-ctx-item" onclick="mp2OpenTrackEditor('${escapeHtml(trackName)}')">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      Edit Title / Artwork
+    </button>
     <button class="mp2-ctx-item danger" onclick="mp2DeleteTrack('${escapeHtml(trackName)}')">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
       Delete
@@ -2191,21 +2301,31 @@ function mp2ToggleLyricsPanel() {
 // Background pre-fetch (doesn't update DOM unless panel is open)
 async function mp2FetchLyricsBackground(filename) {
   if (!filename) return;
+  const stem   = filename.replace(/\.(mp3|flac|wav|ogg|m4a|aac|opus|wma|webm)$/i, '');
   const title  = mp2GuessTitle(filename);
-  const artist = mp2GuessArtist(filename);
+  const artist = mp2GuessArtist(filename) ||
+    (typeof mp2DetectArtistInTitle === 'function' ? mp2DetectArtistInTitle(stem) : null) || '';
+  const cleanTitle = title.replace(/\s*[\(\[].*?[\)\]]/gi, '').replace(/\s*(official|video|audio|lyrics|hd|4k|mv|music|full\s*song|ft\.?|feat\.?).*$/gi, '').trim() || title;
+  const titleNoArtist = artist ? _mp2StripArtistFromTitle(cleanTitle) : cleanTitle;
+  // Try most specific first
+  const attempts = [];
+  if (artist && titleNoArtist !== cleanTitle) attempts.push({ track_name: titleNoArtist, artist_name: artist });
+  if (artist && cleanTitle) attempts.push({ track_name: cleanTitle, artist_name: artist });
+  attempts.push({ track_name: cleanTitle });
+  if (title !== cleanTitle) attempts.push({ track_name: title });
   try {
-    const params = new URLSearchParams({ track_name: title });
-    if (artist) params.append('artist_name', artist);
-    const res = await fetch('/api/music/lyrics?' + params, {
-      headers: { Authorization: 'Bearer ' + (window.token || '') }
-    });
-    const data = await res.json();
-    if (data && data.found) {
-      mp2Lyrics.loadedFor = filename;
-      mp2Lyrics.synced = data.synced || false;
-      mp2Lyrics.lines  = data.lines  || [];
-      mp2Lyrics.plain  = data.lyrics || '';
-      mp2Lyrics._preloaded = true;
+    for (const attempt of attempts) {
+      const params = new URLSearchParams({ ...attempt, filename });
+      const res = await fetch('/api/music/lyrics?' + params, { headers: { Authorization: 'Bearer ' + (token || localStorage.getItem('token') || '') } });
+      const data = await res.json();
+      if (data && data.found) {
+        mp2Lyrics.loadedFor = filename;
+        mp2Lyrics.synced = data.synced || false;
+        mp2Lyrics.lines  = data.lines  || [];
+        mp2Lyrics.plain  = data.lyrics || '';
+        mp2Lyrics._preloaded = true;
+        break;
+      }
     }
   } catch {}
 }
@@ -2221,25 +2341,36 @@ async function mp2FetchLyrics(filename) {
   const rawTitle  = mp2GuessTitle(filename);
   const rawArtist = mp2GuessArtist(filename);
 
+  // If mp2GuessArtist returned nothing, try detecting artist from the raw stem too
+  const stem = filename.replace(/\.(mp3|flac|wav|ogg|m4a|aac|opus|wma|webm)$/i, '');
+  const detectedArtist = rawArtist || (typeof mp2DetectArtistInTitle === 'function' ? mp2DetectArtistInTitle(stem) : null) || '';
+
   // Clean title: remove [Official Video], (Lyrics), feat. etc.
   const cleanTitle = rawTitle
     .replace(/\s*[\(\[].*?[\)\]]/gi, '')
-    .replace(/\s*(official|video|audio|lyrics|hd|4k|mv|music|lyric video|ft\.?|feat\.?).*$/gi, '')
+    .replace(/\s*(official|video|audio|lyrics|hd|4k|mv|music|lyric video|full\s*song|ft\.?|feat\.?).*$/gi, '')
     .trim();
 
-  // Build search attempts in priority order
+  // Also try title without the artist name embedded (e.g. "Song Arijit Singh" → "Song")
+  const titleNoArtist = detectedArtist ? _mp2StripArtistFromTitle(cleanTitle) : cleanTitle;
+
+  // Build search attempts in priority order: most specific first
   const attempts = [];
-  if (rawArtist && rawTitle) attempts.push({ track_name: rawTitle, artist_name: rawArtist });
-  if (rawArtist && cleanTitle && cleanTitle !== rawTitle) attempts.push({ track_name: cleanTitle, artist_name: rawArtist });
-  if (rawTitle) attempts.push({ track_name: rawTitle });
-  if (cleanTitle && cleanTitle !== rawTitle) attempts.push({ track_name: cleanTitle });
+  if (detectedArtist && titleNoArtist && titleNoArtist !== cleanTitle) {
+    attempts.push({ track_name: titleNoArtist, artist_name: detectedArtist });
+  }
+  if (detectedArtist && cleanTitle) attempts.push({ track_name: cleanTitle, artist_name: detectedArtist });
+  if (detectedArtist && rawTitle && rawTitle !== cleanTitle) attempts.push({ track_name: rawTitle, artist_name: detectedArtist });
+  if (titleNoArtist && titleNoArtist !== cleanTitle) attempts.push({ track_name: titleNoArtist });
+  if (cleanTitle) attempts.push({ track_name: cleanTitle });
+  if (rawTitle && rawTitle !== cleanTitle) attempts.push({ track_name: rawTitle });
 
   let data = null;
   for (const attempt of attempts) {
     try {
-      const params = new URLSearchParams(attempt);
+      const params = new URLSearchParams({ ...attempt, filename });
       const res = await fetch('/api/music/lyrics?' + params, {
-        headers: { Authorization: 'Bearer ' + (window.token || '') }
+        headers: { Authorization: 'Bearer ' + (token || localStorage.getItem('token') || '') }
       });
       if (!res.ok) continue;
       const d = await res.json();
@@ -2334,8 +2465,21 @@ mpAudio2.addEventListener('seeked', () => { mp2Lyrics.activeLine = -1; });
 
 // Override the window.mpFetchLyrics hook that mp2Load() calls
 window.mpFetchLyrics = function(trackName) {
-  mp2Lyrics.loadedFor = null; // force re-fetch
+  // ── CRITICAL: immediately clear old state so stale lines never animate ──
+  mp2StopLyricSync();
+  mp2Lyrics.loadedFor = null;
+  mp2Lyrics.lines     = [];
+  mp2Lyrics.plain     = '';
+  mp2Lyrics.synced    = false;
+  mp2Lyrics.activeLine = -1;
   mp2Lyrics._pendingTrack = trackName;
+  // Clear the rendered lines from DOM so nothing bounces during load
+  const linesEl = document.getElementById('mpLyricLines');
+  if (linesEl) linesEl.querySelectorAll('.mp-lyric-line').forEach(l => l.classList.remove('active','past'));
+  // Hide LIVE badge
+  document.getElementById('mp2LyricsSyncBadge')  && (document.getElementById('mp2LyricsSyncBadge').style.display  = 'none');
+  document.getElementById('mp2LyricsSyncBadge2') && (document.getElementById('mp2LyricsSyncBadge2').style.display = 'none');
+
   const panel = document.getElementById('mp2CDLyricsPanel');
   if (panel && panel.classList.contains('open')) {
     mp2FetchLyrics(trackName);
@@ -2365,11 +2509,18 @@ window.mp2TogglePlay = function() { triggerHaptic(); return _origPlay(); };
 // ── ADMIN TRACKS MANAGER ─────────────────────────────────────────────────
 
 function mp2OpenAdminPanel() {
-  if (!_mp2IsAdmin) { showToast('Admin only', 'error'); return; }
+  if (!_mp2IsAdmin) {
+    showToast('Admin access required to manage the Tracks folder', 'error');
+    return;
+  }
   const panel = document.getElementById('mp2AdminPanel');
   if (panel) {
     panel.style.display = 'flex';
     mp2AdminLoadFiles();
+    // Show/hide admin-only buttons inside panel
+    panel.querySelectorAll('.mp2-admin-panel-only').forEach(el => {
+      el.style.display = '';
+    });
   }
 }
 
@@ -2413,14 +2564,21 @@ function mp2AdminRenderFiles() {
     const row = document.createElement('div');
     row.className = 'mp2-admin-file-row';
     const isAudio = f.is_audio;
+    const isNA = isAudio && /^(na|n\/a)\s*-\s*/i.test(f.name);
     row.innerHTML = `
       <div class="mp2-admin-file-icon">${isAudio
         ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--mp2-accent)" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>'
         : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--mp2-text3)" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/></svg>'
       }</div>
-      <div class="mp2-admin-file-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+      <div class="mp2-admin-file-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}${isNA ? ' <span style="font-size:9px;background:#ef4444;color:white;padding:1px 5px;border-radius:4px;font-weight:700;vertical-align:middle;">NA</span>' : ''}</div>
       <div class="mp2-admin-file-size">${f.size_fmt}</div>
       <div class="mp2-admin-file-actions">
+        ${isAudio ? `<button class="mp2-admin-btn" onclick="mp2OpenTrackEditor('${escapeHtml(f.name)}')" title="Edit title/thumbnail" style="color:var(--mp2-accent2);">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <button class="mp2-admin-btn" onclick="mp2AdminFindArtistForTrack('${escapeHtml(f.name)}')" title="Find / fix artist name (works on ANY track)" style="color:var(--mp2-accent);font-size:12px;padding:3px 7px;line-height:1.4;">
+          🔎
+        </button>` : ''}
         <button class="mp2-admin-btn" onclick="mp2AdminRenameFile('${escapeHtml(f.name)}')" title="Rename">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
         </button>
@@ -2490,6 +2648,283 @@ async function mp2AdminFixNANames() {
   } catch (e) { showToast(e.message, 'error'); }
 }
 
+// ── ARTIST NAME DETECTION DATABASE ───────────────────────────────────────────
+// Used to auto-detect artist from song title when file is "NA - Song Title.mp3"
+const _mp2ArtistDB = [
+  // Each entry: [canonical name, ...aliases] — sorted longest-first at runtime
+  // ── Bollywood / Hindi ────────────────────────────────
+  ["Yo Yo Honey Singh",  "yo yo honey singh","yoyo honey singh"],
+  ["Honey Singh",        "honey singh"],
+  ["Badshah",            "badshah"],
+  ["Raftaar",            "raftaar"],
+  ["Divine",             "divine"],
+  ["Emiway Bantai",      "emiway bantai","emiway"],
+  ["MC Stan",            "mc stan"],
+  ["Arijit Singh",       "arijit singh","arijit"],
+  ["Atif Aslam",         "atif aslam","atif"],
+  ["Shreya Ghoshal",     "shreya ghoshal","shreya"],
+  ["Sonu Nigam",         "sonu nigam"],
+  ["Kumar Sanu",         "kumar sanu"],
+  ["Udit Narayan",       "udit narayan"],
+  ["Alka Yagnik",        "alka yagnik"],
+  ["Lata Mangeshkar",    "lata mangeshkar","lata"],
+  ["Asha Bhosle",        "asha bhosle","asha bhonsle"],
+  ["Mohammed Rafi",      "mohammed rafi","md rafi","mohammad rafi"],
+  ["Kishore Kumar",      "kishore kumar","kishore"],
+  ["A. R. Rahman",       "a r rahman","ar rahman","a.r. rahman"],
+  ["Pritam",             "pritam"],
+  ["Amit Trivedi",       "amit trivedi"],
+  ["Shaan",              "shaan"],
+  ["KK",                 "k.k."],
+  ["Sunidhi Chauhan",    "sunidhi chauhan"],
+  ["Neha Kakkar",        "neha kakkar"],
+  ["Tony Kakkar",        "tony kakkar"],
+  ["Darshan Raval",      "darshan raval"],
+  ["B Praak",            "b praak","b. praak"],
+  ["Jubin Nautiyal",     "jubin nautiyal","jubin"],
+  ["Armaan Malik",       "armaan malik"],
+  ["Mika Singh",         "mika singh","mika"],
+  ["Nucleya",            "nucleya"],
+  ["Krsna",              "krsna"],
+  ["Bohemia",            "bohemia"],
+  ["Imran Khan",         "imran khan"],
+  // ── Aditya Rikhari & similar ───────────────────────
+  ["Aditya Rikhari",     "aditya rikhari"],
+  ["Prateek Kuhad",      "prateek kuhad"],
+  ["Ritviz",             "ritviz"],
+  ["Papon",              "papon"],
+  ["Mohit Chauhan",      "mohit chauhan"],
+  ["Lucky Ali",          "lucky ali"],
+  // ── Punjabi ───────────────────────────────────────
+  ["Diljit Dosanjh",     "diljit dosanjh","diljit"],
+  ["Sidhu Moosewala",    "sidhu moosewala","moosewala"],
+  ["AP Dhillon",         "ap dhillon"],
+  ["Hardy Sandhu",       "hardy sandhu","harrdy sandhu"],
+  ["Karan Aujla",        "karan aujla"],
+  ["Mankirt Aulakh",     "mankirt aulakh"],
+  ["Garry Sandhu",       "garry sandhu"],
+  ["Ammy Virk",          "ammy virk"],
+  ["Prabh Gill",         "prabh gill"],
+  ["Jassie Gill",        "jassie gill"],
+  ["Sharry Maan",        "sharry maan"],
+  ["Gippy Grewal",       "gippy grewal"],
+  ["Sunanda Sharma",     "sunanda sharma"],
+  ["Satinder Sartaaj",   "satinder sartaaj","satinder sartaj"],
+  ["R Nait",             "r nait"],
+  // ── Sufi / Qawwali ────────────────────────────────
+  ["Nusrat Fateh Ali Khan","nusrat fateh ali khan","nusrat"],
+  ["Rahat Fateh Ali Khan", "rahat fateh ali khan","rahat"],
+  ["Abida Parveen",      "abida parveen"],
+  ["Kaifi Khalil",       "kaifi khalil"],
+  ["Rabbi Shergill",     "rabbi shergill","rabbi"],
+  // ── Tamil / South ─────────────────────────────────
+  ["Sid Sriram",         "sid sriram"],
+  ["Anirudh Ravichander","anirudh ravichander","anirudh"],
+  ["Yuvan Shankar Raja", "yuvan shankar raja","yuvan"],
+  ["Harris Jayaraj",     "harris jayaraj","harris"],
+  ["Devi Sri Prasad",    "devi sri prasad","dsp"],
+  ["Shankar Mahadevan",  "shankar mahadevan"],
+  ["S. P. Balasubrahmanyam","sp balasubrahmanyam","spb"],
+  // ── International ─────────────────────────────────
+  ["Drake",              "drake"],
+  ["Eminem",             "eminem"],
+  ["Kanye West",         "kanye west","ye"],
+  ["Kendrick Lamar",     "kendrick lamar"],
+  ["Travis Scott",       "travis scott"],
+  ["Post Malone",        "post malone"],
+  ["The Weeknd",         "the weeknd"],
+  ["Billie Eilish",      "billie eilish"],
+  ["Taylor Swift",       "taylor swift"],
+  ["Ed Sheeran",         "ed sheeran"],
+  ["Dua Lipa",           "dua lipa"],
+  ["Ariana Grande",      "ariana grande"],
+  ["Bad Bunny",          "bad bunny"],
+  ["Coldplay",           "coldplay"],
+  ["Imagine Dragons",    "imagine dragons"],
+  ["Linkin Park",        "linkin park"],
+  ["BTS",                "bts"],
+  ["BLACKPINK",          "blackpink"],
+];
+
+// Flatten into alias→canonical map, sorted by alias length descending
+const _mp2ArtistAliases = [];
+_mp2ArtistDB.forEach(([canonical, ...aliases]) => {
+  aliases.forEach(alias => _mp2ArtistAliases.push([alias, canonical]));
+});
+_mp2ArtistAliases.sort((a, b) => b[0].length - a[0].length);
+
+function mp2DetectArtistInTitle(title) {
+  if (!title) return null;
+  // Remove feat./ft./prod.by so they don't block detection
+  const clean = title.toLowerCase().replace(/\b(feat\.?|ft\.?|featuring|prod\.? by|×|x|vs\.?)\b/g, ' ');
+  for (const [alias, canonical] of _mp2ArtistAliases) {
+    // Word-boundary: alias surrounded by non-alphanumeric or string edge
+    const esc = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pat = new RegExp('(?<![a-z0-9])' + esc + '(?![a-z0-9])', 'i');
+    if (pat.test(clean)) return canonical;
+  }
+  return null;
+}
+
+// ── TRACK EDITOR — thumbnail + title ─────────────────────────────────────────
+function mp2OpenTrackEditor(filename) {
+  const existing = document.getElementById('mp2TrackEditor');
+  if (existing) existing.remove();
+
+  const rawArtist = mp2GuessArtist(filename);
+  const title     = mp2GuessTitle(filename);
+  const ext       = filename.match(/\.[^.]+$/)?.[0] || '.mp3';
+  const isNA      = /^(na|n\/a)$/i.test(rawArtist) || rawArtist === '';
+
+  // Auto-detect artist from title if filename has NA/empty artist
+  const detected  = isNA ? (mp2DetectArtistInTitle(title) || '') : rawArtist;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'mp2TrackEditor';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:10000;display:flex;align-items:center;justify-content:center;';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+  overlay.innerHTML = `
+    <div style="background:var(--mp2-bg2);border-radius:16px;padding:28px;width:440px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 24px 60px rgba(0,0,0,.8);">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+        <h3 style="margin:0;font-size:16px;color:var(--mp2-text);">✏️ Edit Track</h3>
+        <button onclick="document.getElementById('mp2TrackEditor').remove()" style="background:none;border:none;color:var(--mp2-text3);cursor:pointer;font-size:20px;line-height:1;">×</button>
+      </div>
+
+      <!-- Thumbnail upload -->
+      <div style="margin-bottom:18px;">
+        <label style="font-size:12px;font-weight:600;color:var(--mp2-text2);letter-spacing:.5px;display:block;margin-bottom:8px;">ARTWORK</label>
+        <div style="display:flex;align-items:flex-start;gap:14px;">
+          <div id="mp2TeThumbPreview" onclick="document.getElementById('mp2TeThumbInput').click()" title="Click to change"
+            style="width:80px;height:80px;flex-shrink:0;border-radius:10px;background:var(--mp2-surface2);overflow:hidden;cursor:pointer;border:2px dashed var(--mp2-border);display:flex;align-items:center;justify-content:center;position:relative;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--mp2-text3)" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            <div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.5);font-size:9px;color:white;text-align:center;padding:2px;">Click to change</div>
+          </div>
+          <div style="font-size:12px;color:var(--mp2-text3);padding-top:4px;">
+            Upload a JPG, PNG or WEBP image to use as album art for this track.<br><br>
+            <span style="color:var(--mp2-accent2);font-size:11px;">Tip: Square images look best (e.g. 500×500 px)</span>
+          </div>
+        </div>
+        <input type="file" id="mp2TeThumbInput" accept="image/*" style="display:none;" onchange="mp2TePreviewThumb(this)">
+      </div>
+
+      <!-- Title -->
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12px;font-weight:600;color:var(--mp2-text2);letter-spacing:.5px;display:block;margin-bottom:6px;">TITLE</label>
+        <input id="mp2TeTitle" type="text" value="${escapeHtml(title)}"
+          style="width:100%;background:var(--mp2-surface2);border:1px solid var(--mp2-border);border-radius:8px;color:var(--mp2-text);padding:9px 12px;font-size:14px;outline:none;box-sizing:border-box;">
+      </div>
+
+      <!-- Artist -->
+      <div style="margin-bottom:20px;">
+        <label style="font-size:12px;font-weight:600;color:var(--mp2-text2);letter-spacing:.5px;display:block;margin-bottom:6px;">
+          ARTIST
+          ${detected && isNA ? `<span style="font-size:10px;background:rgba(124,58,237,0.25);color:var(--mp2-accent2);padding:1px 6px;border-radius:8px;margin-left:6px;">🔍 auto-detected</span>` : ''}
+        </label>
+        <input id="mp2TeArtist" type="text" value="${escapeHtml(detected)}" placeholder="Artist name (leave blank if unknown)"
+          style="width:100%;background:var(--mp2-surface2);border:1px solid var(--mp2-border);border-radius:8px;color:var(--mp2-text);padding:9px 12px;font-size:14px;outline:none;box-sizing:border-box;">
+        ${isNA && !detected ? `<div style="margin-top:6px;font-size:11px;color:var(--mp2-text3);">Artist not auto-detected — type it manually above.</div>` : ''}
+      </div>
+
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button onclick="document.getElementById('mp2TrackEditor').remove()"
+          style="background:var(--mp2-surface2);border:1px solid var(--mp2-border);border-radius:8px;color:var(--mp2-text2);padding:9px 18px;cursor:pointer;font-size:13px;">Cancel</button>
+        <button onclick="mp2TeSubmit('${escapeHtml(filename)}', '${ext}')"
+          style="background:var(--mp2-accent);border:none;border-radius:8px;color:white;padding:9px 20px;cursor:pointer;font-size:13px;font-weight:600;">Save Changes</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  // Load existing thumbnail preview if available
+  if (mp2TrackHasThumb(filename)) {
+    const img = document.createElement('img');
+    img.src = mp2ThumbUrl(filename);
+    img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
+    const prev = document.getElementById('mp2TeThumbPreview');
+    if (prev) {
+      prev.innerHTML = '';
+      prev.appendChild(img);
+      const badge = document.createElement('div');
+      badge.style.cssText = 'position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.5);font-size:9px;color:white;text-align:center;padding:2px;';
+      badge.textContent = 'Click to change';
+      prev.appendChild(badge);
+    }
+  }
+}
+
+function mp2TePreviewThumb(input) {
+  if (!input.files || !input.files[0]) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const prev = document.getElementById('mp2TeThumbPreview');
+    if (prev) {
+      prev.innerHTML = `<img src="${e.target.result}" style="width:100%;height:100%;object-fit:cover;border-radius:8px;">`;
+    }
+  };
+  reader.readAsDataURL(input.files[0]);
+}
+
+async function mp2TeSubmit(oldFilename, ext) {
+  const newTitle  = document.getElementById('mp2TeTitle')?.value.trim() || '';
+  const newArtist = document.getElementById('mp2TeArtist')?.value.trim() || '';
+  const thumbFile = document.getElementById('mp2TeThumbInput')?.files[0];
+
+  if (!newTitle) { showToast('Title cannot be empty', 'error'); return; }
+
+  // Build new filename
+  const newFilename = newArtist
+    ? `${newArtist} - ${newTitle}${ext}`
+    : `${newTitle}${ext}`;
+
+  let anyChange = false;
+
+  // 1. Rename if filename changed
+  if (newFilename !== oldFilename) {
+    try {
+      const res = await fetch('/api/music/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ old_name: oldFilename, new_name: newFilename })
+      });
+      const d = await safeJson(res);
+      if (!res.ok) throw new Error(d.error || 'Rename failed');
+      anyChange = true;
+    } catch (e) { showToast(e.message, 'error'); return; }
+  }
+
+  // 2. Upload thumbnail if provided
+  if (thumbFile) {
+    try {
+      const fd = new FormData();
+      fd.append('track_name', newFilename);
+      fd.append('file', thumbFile);
+      const res = await fetch('/api/music/cover', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token },
+        body: fd
+      });
+      const d = await safeJson(res);
+      if (!res.ok) throw new Error(d.error || 'Thumbnail upload failed');
+      // Clear art cache for old and new filenames
+      delete mp2.artCache[oldFilename];
+      delete mp2.artCache[newFilename];
+      anyChange = true;
+    } catch (e) { showToast(e.message, 'error'); return; }
+  }
+
+  if (anyChange) {
+    showToast('Track updated ✓', 'success');
+    document.getElementById('mp2TrackEditor')?.remove();
+    await mp2AdminLoadFiles();
+    await mp2LoadTracks();
+    mp2RenderAll();
+  } else {
+    showToast('No changes to save');
+    document.getElementById('mp2TrackEditor')?.remove();
+  }
+}
+
 // ── SWIPE GESTURES ON CD MODAL ────────────────────────────────────────
 (function() {
   let touchStartX = 0, touchStartY = 0;
@@ -2512,3 +2947,130 @@ async function mp2AdminFixNANames() {
     else { triggerHaptic(); mp2Prev(); }            // Swipe right = prev
   }, { passive: true });
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ADMIN UTILITY FUNCTIONS  (Refresh Everything, Find Artist per-track & bulk)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function mp2RefreshEverything() {
+  if (!_mp2IsAdmin) { showToast('Admin only', 'error'); return; }
+  showToast('⚡ Refreshing everything…', 'info');
+  try {
+    // 1. Scan disk for new files
+    await fetch('/api/music/scan', { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
+    // 2. Reload prefs + tracks
+    await mp2LoadPrefs();
+    await mp2LoadTracks();
+    // 3. Refresh admin file list if panel is open
+    const panel = document.getElementById('mp2AdminPanel');
+    if (panel && panel.style.display !== 'none') await mp2AdminLoadFiles();
+    // 4. Re-render
+    mp2RenderAll();
+    // 5. Refresh artist images in background (non-blocking)
+    mp2EnrichArtists();
+    showToast('⚡ Everything refreshed!', 'success');
+  } catch (e) { showToast('Error: ' + e.message, 'error'); }
+}
+
+// ── FIND ARTIST FOR A SINGLE TRACK  (works on any track, not just NA) ────────
+async function mp2AdminFindArtistForTrack(filename) {
+  const ext          = (filename.match(/\.[^.]+$/) || [''])[0];
+  const stem         = filename.replace(/\.[^.]+$/, '');
+  // If "Artist - Title" format, search the title part; otherwise search whole stem
+  const titlePart    = stem.includes(' - ') ? stem.split(' - ').slice(1).join(' - ').trim() : stem;
+  const currentArtist = stem.includes(' - ') ? stem.split(' - ')[0].trim() : '';
+
+  // Clean search title
+  const cleanTitle = titlePart
+    .replace(/\s*[\(\[].*?[\)\]]/gi, '')
+    .replace(/\s*(official|video|audio|lyrics|hd|4k|mv|music|full\s*song|ft\.?|feat\.?).*$/gi, '')
+    .trim() || titlePart;
+
+  showToast(`🔎 Looking up artist for "${cleanTitle}"…`, 'info');
+
+  // 1. Try local artist database first (instant)
+  const localArtist = typeof mp2DetectArtistInTitle === 'function'
+    ? (mp2DetectArtistInTitle(titlePart) || mp2DetectArtistInTitle(stem) || null)
+    : null;
+
+  // 2. Ask backend detect_artist (also uses the server-side DB + title scan)
+  let serverArtist = null;
+  try {
+    const r = await fetch('/api/music/detect_artist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ title: cleanTitle })
+    });
+    const d = await safeJson(r);
+    serverArtist = d.artist || null;
+  } catch {}
+
+  const detected = localArtist || serverArtist;
+
+  let chosenArtist;
+  if (detected) {
+    const ok = confirm(
+      `Artist detected: ${detected}\n\nCurrent: "${currentArtist || '(none)'}"\nTitle:   "${titlePart}"\n\nRename to:\n"${detected} - ${titlePart}${ext}"?\n\nOK = yes   Cancel = enter manually`
+    );
+    chosenArtist = ok ? detected : prompt(`Enter artist name for:\n"${titlePart}"`, detected);
+  } else {
+    chosenArtist = prompt(
+      `No artist found automatically for:\n"${cleanTitle}"\n\nEnter artist name (or cancel to skip):`,
+      currentArtist || ''
+    );
+  }
+
+  if (!chosenArtist || !chosenArtist.trim()) { showToast('Skipped', 'info'); return; }
+  chosenArtist = chosenArtist.trim();
+
+  const newName = `${chosenArtist} - ${titlePart}${ext}`;
+  if (newName === filename) { showToast('No change needed', 'info'); return; }
+
+  try {
+    const res = await fetch('/api/music/admin/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ old_name: filename, new_name: newName })
+    });
+    const d = await safeJson(res);
+    if (!res.ok) { showToast(d.error || 'Rename failed', 'error'); return; }
+    showToast(`✅ Renamed to: ${d.new_name || newName}`, 'success');
+    await mp2AdminLoadFiles();
+    await mp2LoadTracks();
+    mp2RenderAll();
+  } catch (e) { showToast('Error: ' + e.message, 'error'); }
+}
+
+// ── FIND ALL ARTISTS (bulk MusicBrainz — works on any track) ─────────────────
+async function mp2AdminFindAllArtists() {
+  if (!_mp2IsAdmin) { showToast('Admin only', 'error'); return; }
+
+  const all = confirm(
+    'Find artists via MusicBrainz for:\n\n' +
+    'OK     = ALL tracks (including ones that already have an artist)\n' +
+    'Cancel = Only tracks missing an artist (no " - " separator)'
+  );
+
+  const defaultArtist = prompt(
+    'Fallback artist name for any track where no artist is found\n(leave blank to skip unresolved tracks):',
+    ''
+  );
+  if (defaultArtist === null) return; // user hit Cancel on this prompt
+
+  showToast('🔎 Running artist search… this may take a while', 'info');
+
+  try {
+    const res = await fetch('/api/music/admin/fix_artist_names', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ default_artist: defaultArtist.trim(), scan_all: all })
+    });
+    const d = await safeJson(res);
+    if (!res.ok) throw new Error(d.error || 'Failed');
+    const errCount = d.errors?.length || 0;
+    showToast(`✅ Renamed ${d.count} track(s)${errCount ? `. ${errCount} skipped.` : '.'}`, 'success');
+    await mp2AdminLoadFiles();
+    await mp2LoadTracks();
+    mp2RenderAll();
+  } catch (e) { showToast('Error: ' + e.message, 'error'); }
+}

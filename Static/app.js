@@ -4042,3 +4042,38 @@ const _origMpRenderNP = mpRenderNowPlaying;
 window.mpRenderNowPlaying = function() {
     _origMpRenderNP();
 };
+
+/* ── TRACKS FOLDER MANAGER — admin shortcut from NAS sidebar ── */
+function openTracksFolderManager() {
+    const ov = document.getElementById('musicOverlay');
+    const isOpen = ov && (ov.style.display === 'flex' || (ov.style.display !== 'none' && ov.classList.contains('open')));
+
+    function _tryOpenPanel(attemptsLeft) {
+        // mp2OpenAdminPanel guards itself — it shows an error toast if not admin
+        if (typeof mp2OpenAdminPanel === 'function') {
+            mp2OpenAdminPanel();
+        } else if (attemptsLeft > 0) {
+            setTimeout(() => _tryOpenPanel(attemptsLeft - 1), 250);
+        }
+    }
+
+    if (isOpen) {
+        // Music is already open — just open the panel
+        _tryOpenPanel(5);
+    } else {
+        // Enter music mode first, wait for init, then open panel
+        if (typeof enterMusicMode === 'function') enterMusicMode();
+        // Poll until mp2OpenAdminPanel becomes available and mp2Init has run
+        let tries = 0;
+        const poll = setInterval(() => {
+            tries++;
+            if (typeof mp2OpenAdminPanel === 'function' && typeof _mp2Initialized !== 'undefined' && _mp2Initialized) {
+                clearInterval(poll);
+                mp2OpenAdminPanel();
+            } else if (tries > 40) {
+                clearInterval(poll);
+                if (typeof mp2OpenAdminPanel === 'function') mp2OpenAdminPanel();
+            }
+        }, 200);
+    }
+}

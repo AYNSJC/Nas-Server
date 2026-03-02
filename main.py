@@ -566,6 +566,84 @@ def serve_static(filename):
     return send_from_directory(STATIC_DIR, filename)
 
 
+@app.route("/manifest.json")
+def pwa_manifest():
+    """PWA manifest so the app is recognized when pinned to home screen."""
+    manifest = {
+        "name": "Resonance NAS",
+        "short_name": "Resonance",
+        "description": "Personal NAS & Music Player",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#08090f",
+        "theme_color": "#7c3aed",
+        "orientation": "portrait-primary",
+        "icons": [
+            {
+                "src": "/static/icons/icon-192.png",
+                "sizes": "192x192",
+                "type": "image/png",
+                "purpose": "any maskable"
+            },
+            {
+                "src": "/static/icons/icon-512.png",
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "any maskable"
+            }
+        ]
+    }
+    resp = make_response(json.dumps(manifest))
+    resp.headers['Content-Type'] = 'application/manifest+json'
+    return resp
+
+
+@app.route("/generate-icons")
+def generate_pwa_icons():
+    """One-time: generate PWA icon files from SVG. Visit once, then icons persist."""
+    icons_dir = STATIC_DIR / "icons"
+    icons_dir.mkdir(exist_ok=True)
+
+    # Draw a 512×512 Resonance icon using Pillow
+    try:
+        from PIL import Image as _PILImg, ImageDraw as _PILDraw
+        for size in (192, 512):
+            img = _PILImg.new("RGBA", (size, size), (0, 0, 0, 0))
+            d = _PILDraw.Draw(img)
+            r = size // 2
+            # Purple circle background
+            d.ellipse([0, 0, size - 1, size - 1], fill="#7c3aed")
+            # Music note paths (simplified as rectangles + circle)
+            lw = max(2, size // 32)
+            # Staff line (horizontal beam at top-right)
+            beam_y = int(size * 0.28)
+            beam_h = int(size * 0.08)
+            beam_x1 = int(size * 0.36)
+            beam_x2 = int(size * 0.82)
+            d.rectangle([beam_x1, beam_y, beam_x2, beam_y + beam_h], fill="white")
+            # Left note stem
+            stem_x = beam_x1
+            stem_w = lw
+            stem_top = beam_y
+            stem_bot = int(size * 0.72)
+            d.rectangle([stem_x, stem_top, stem_x + stem_w, stem_bot], fill="white")
+            # Right note stem
+            stem2_x = beam_x2 - lw
+            stem2_bot = int(size * 0.65)
+            d.rectangle([stem2_x, stem_top, stem2_x + stem_w, stem2_bot], fill="white")
+            # Left note head (ellipse)
+            nh = int(size * 0.13)
+            nw = int(size * 0.17)
+            d.ellipse([stem_x - nw // 2, stem_bot - nh // 2, stem_x + nw // 2, stem_bot + nh // 2], fill="white")
+            # Right note head
+            d.ellipse([stem2_x - nw // 2, stem2_bot - nh // 2, stem2_x + nw // 2, stem2_bot + nh // 2], fill="white")
+
+            img.save(str(icons_dir / f"icon-{size}.png"), "PNG")
+        return jsonify({"ok": True, "msg": "Icons generated at /static/icons/"}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ==================== API ENDPOINTS ====================
 @app.route("/api/register", methods=["POST"])
 def register():
@@ -3094,22 +3172,36 @@ def _parse_lrc(lrc_text):
 
 
 def _search_lrclib(track_name, artist_name=""):
-    """Search lrclib.net for lyrics. Returns dict or None."""
-    try:
-        params = {"track_name": track_name}
-        if artist_name:
-            params["artist_name"] = artist_name
-        url = "https://lrclib.net/api/search?" + _urllib_parse.urlencode(params)
-        req = _urllib_req.Request(url, headers={"User-Agent": "NAS-Music/1.0"})
+    """Search lrclib.net for lyrics. Returns dict or None.
+    Tries track_name+artist_name first, then falls back to free-text q= search."""
+    def _try_url(url):
+        req = _urllib_req.Request(url, headers={"User-Agent": "NAS-MusicPlayer/2.0 (nas@localhost)"})
         with _urllib_req.urlopen(req, timeout=8) as r:
-            results = json.loads(r.read().decode())
-        if not results:
+            return json.loads(r.read().decode())
+
+    def _extract(results):
+        if not results or not isinstance(results, list):
             return None
-        best = results[0]
+        # Prefer a result with synced lyrics; fall back to best plain-only result
+        best_synced = None
+        best_plain  = None
+        for entry in results:
+            if not isinstance(entry, dict):
+                continue
+            synced_raw = entry.get("syncedLyrics", "") or ""
+            plain_raw  = entry.get("plainLyrics",  "") or ""
+            if synced_raw and best_synced is None:
+                best_synced = entry
+            if plain_raw and best_plain is None:
+                best_plain = entry
+            if best_synced and best_plain:
+                break  # have both — stop scanning
+
+        best = best_synced or best_plain
+        if not best:
+            return None
         synced_raw = best.get("syncedLyrics", "") or ""
         plain_raw  = best.get("plainLyrics",  "") or ""
-        if not synced_raw and not plain_raw:
-            return None
         return {
             "found": True,
             "synced": bool(synced_raw),
@@ -3119,8 +3211,57 @@ def _search_lrclib(track_name, artist_name=""):
             "artist": best.get("artistName", ""),
             "source": "lrclib",
         }
+
+    try:
+        # Build case variants — lrclib structured search can be case-sensitive
+        # e.g. "FAASLE" may not match "Faasle" in their index
+        name_variants = list(dict.fromkeys(filter(None, [
+            track_name,
+            track_name.title(),
+            track_name.lower(),
+            track_name.capitalize(),
+        ])))
+
+        # Attempt 1: structured search (track_name + optional artist_name)
+        # Try all case variants with artist first
+        for variant in name_variants:
+            params = {"track_name": variant}
+            if artist_name:
+                params["artist_name"] = artist_name
+            url = "https://lrclib.net/api/search?" + _urllib_parse.urlencode(params)
+            result = _extract(_try_url(url))
+            if result:
+                return result
+
+        # Attempt 2: free-text q= query — fuzzy, catches romanised / non-Latin titles
+        # Try "artist track" then just "track" in all variants
+        q_variants = list(dict.fromkeys(filter(None, [
+            f"{artist_name} {track_name}".strip() if artist_name else None,
+            f"{artist_name} {track_name.title()}".strip() if artist_name else None,
+            track_name,
+            track_name.title(),
+            track_name.lower(),
+        ])))
+        for q in q_variants:
+            url = "https://lrclib.net/api/search?" + _urllib_parse.urlencode({"q": q})
+            result = _extract(_try_url(url))
+            if result:
+                return result
+
+        # Attempt 3: if artist name has feat./& separators, strip them and retry
+        if artist_name and re.search(r'\bfeat\.?|ft\.?|×|&', artist_name, re.IGNORECASE):
+            clean_artist = re.split(r'\bfeat\.?|ft\.?|×|&', artist_name, flags=re.IGNORECASE)[0].strip()
+            if clean_artist and clean_artist != artist_name:
+                for variant in name_variants:
+                    params3 = {"track_name": variant, "artist_name": clean_artist}
+                    url3 = "https://lrclib.net/api/search?" + _urllib_parse.urlencode(params3)
+                    result = _extract(_try_url(url3))
+                    if result:
+                        return result
+
     except Exception:
-        return None
+        pass
+    return None
 
 
 def _search_genius(track_name, artist_name=""):
@@ -3205,40 +3346,108 @@ def _search_genius(track_name, artist_name=""):
 def music_lyrics():
     track_name  = request.args.get("track_name",  "").strip()
     artist_name = request.args.get("artist_name", "").strip()
+    filename    = request.args.get("filename",    "").strip()   # actual audio filename for sidecar I/O
     if not track_name:
         return jsonify({"found": False, "msg": "track_name required"}), 400
 
-    # Clean track name for better matching
+    # ── 1. Check for cached .lrc sidecar (saved by a previous lrclib hit) ──
+    if filename:
+        stem = re.sub(r'\.(mp3|flac|wav|ogg|m4a|aac|opus|wma|webm)$', '', filename, flags=re.IGNORECASE)
+        lrc_path = MUSIC_DIR / (stem + ".lrc")
+        if lrc_path.exists():
+            try:
+                lrc_text = lrc_path.read_text(encoding="utf-8")
+                lines = _parse_lrc(lrc_text)
+                synced = bool(lines)
+                plain_lines = re.sub(r'\[\d+:\d+\.\d+\]\s*', '', lrc_text).strip()
+                return jsonify({
+                    "found": True,
+                    "synced": synced,
+                    "lines": lines,
+                    "lyrics": plain_lines,
+                    "title": stem,
+                    "artist": artist_name,
+                    "source": "lrclib",
+                    "cached": True,
+                }), 200
+            except Exception:
+                pass  # corrupted sidecar — fall through to network fetch
+
+    # If no artist provided, try to detect one from the track name itself
+    if not artist_name:
+        artist_name = _detect_artist_in_title(track_name) or ""
+
+    # Aggressively clean track name: remove [Official Video], (Lyrics), feat., etc.
     clean_title = re.sub(
-        r'\s*[\(\[].*?(official|video|audio|lyrics|hd|4k|mv|music|full\s*song|feat\.?|ft\.?).*?[\)\]]',
+        r'\s*[\(\[].*?(official|video|audio|lyrics|hd|4k|mv|music|full\s*song|feat\.?|ft\.?|lyric).*?[\)\]]',
         '', track_name, flags=re.IGNORECASE
+    )
+    clean_title = re.sub(
+        r'\s*(official\s*(video|audio|lyric|song)?|full\s*video|lyric\s*video|hd|4k|audio|music\s*video)\s*$',
+        '', clean_title, flags=re.IGNORECASE
     ).strip() or track_name
 
-    # Build search attempts from highest to lowest confidence
-    attempts_lrc = []
-    if artist_name and track_name:
-        attempts_lrc.append((track_name, artist_name))
-    if artist_name and clean_title and clean_title != track_name:
-        attempts_lrc.append((clean_title, artist_name))
-    attempts_lrc.append((track_name, ""))
-    if clean_title != track_name:
-        attempts_lrc.append((clean_title, ""))
+    # Strip detected artist name from the title for a cleaner query
+    title_no_artist = clean_title
+    if artist_name:
+        for alias, canonical in _ARTIST_ALIASES:
+            if canonical == artist_name:
+                esc = re.escape(alias)
+                title_no_artist = re.sub(r'(?<![a-z0-9])' + esc + r'(?![a-z0-9])',
+                                         '', title_no_artist, flags=re.IGNORECASE).strip()
+        title_no_artist = re.sub(r'^[\s\-|,·]+|[\s\-|,·]+$', '', title_no_artist).strip()
+        if not title_no_artist:
+            title_no_artist = clean_title
 
-    # 1. Try lrclib first (has synced lyrics, good for English)
+    def _unique(lst):
+        seen = set(); out = []
+        for x in lst:
+            k = str(x)
+            if k not in seen: seen.add(k); out.append(x)
+        return out
+
+    attempts_lrc = _unique([
+        (title_no_artist, artist_name)  if (artist_name and title_no_artist != clean_title) else None,
+        (clean_title,     artist_name)  if artist_name else None,
+        (track_name,      artist_name)  if (artist_name and track_name != clean_title) else None,
+        (title_no_artist, "")           if title_no_artist != clean_title else None,
+        (clean_title,     ""),
+        (track_name,      "")           if track_name != clean_title else None,
+    ])
+    attempts_lrc = [a for a in attempts_lrc if a]
+
+    # ── 2. Try lrclib (synced lyrics, first priority) ──────────────────────
     for tn, an in attempts_lrc:
         result = _search_lrclib(tn, an)
         if result:
+            # Save .lrc sidecar so next play loads instantly — lrclib only
+            if filename:
+                try:
+                    stem = re.sub(r'\.(mp3|flac|wav|ogg|m4a|aac|opus|wma|webm)$', '', filename, flags=re.IGNORECASE)
+                    lrc_path = MUSIC_DIR / (stem + ".lrc")
+                    if result.get("synced") and result.get("lines"):
+                        lrc_lines = []
+                        for line in result["lines"]:
+                            ms = line["time_ms"]
+                            m, s_ms = divmod(ms, 60000)
+                            s, cs = divmod(s_ms, 1000)
+                            lrc_lines.append(f"[{int(m):02d}:{int(s):02d}.{int(cs):02d}]{line['text']}")
+                        lrc_path.write_text("\n".join(lrc_lines), encoding="utf-8")
+                    elif result.get("lyrics"):
+                        lrc_path.write_text(result["lyrics"], encoding="utf-8")
+                except Exception:
+                    pass  # sidecar save failure is non-fatal
             return jsonify(result), 200
 
-    # 2. Fallback: Genius (broader, better for Indian / world music)
-    genius_attempts = []
-    if artist_name:
-        genius_attempts.append((track_name, artist_name))
-        if clean_title != track_name:
-            genius_attempts.append((clean_title, artist_name))
-    genius_attempts.append((track_name, ""))
-    if clean_title != track_name:
-        genius_attempts.append((clean_title, ""))
+    # ── 3. Fallback: Genius (broader coverage — NOT saved to disk) ─────────
+    genius_attempts = _unique([
+        (title_no_artist, artist_name)  if (artist_name and title_no_artist != clean_title) else None,
+        (clean_title,     artist_name)  if artist_name else None,
+        (title_no_artist, "")           if title_no_artist != clean_title else None,
+        (clean_title,     ""),
+        (track_name,      "")           if track_name != clean_title else None,
+    ])
+    genius_attempts = [a for a in genius_attempts if a]
 
     for tn, an in genius_attempts:
         result = _search_genius(tn, an)
@@ -3392,6 +3601,46 @@ def music_search_youtube():
 
 
 # ──────────────────────────────────────────────────────────────────
+#  RENAME SINGLE TRACK — accessible to all authenticated users
+#  Used by the track editor (Edit Title / Artwork) in music-v2.js
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/music/rename", methods=["POST"])
+@jwt_required()
+def music_rename_track():
+    """Rename a single track file + its .webp sidecar. No admin required."""
+    data = request.get_json() or {}
+    old  = data.get("old_name", "").strip()
+    new  = data.get("new_name", "").strip()
+    if not old or not new:
+        return jsonify({"error": "old_name and new_name required"}), 400
+    old_path = _safe_music_path(old)
+    if not old_path or not old_path.exists():
+        return jsonify({"error": "File not found"}), 404
+    _, ext = os.path.splitext(old)
+    if not os.path.splitext(new)[1]:
+        new += ext
+    safe_new = re.sub(r'[/\\:*?"<>|]', '_', new).strip()
+    new_path = _safe_music_path(safe_new)
+    if not new_path:
+        return jsonify({"error": "Invalid name"}), 400
+    if new_path.exists() and new_path != old_path:
+        return jsonify({"error": "A file with that name already exists"}), 409
+    old_path.rename(new_path)
+    # Rename matching .webp sidecar too
+    webp_old = MUSIC_DIR / (old_path.stem + ".webp")
+    webp_new = MUSIC_DIR / (new_path.stem + ".webp")
+    if webp_old.exists() and not webp_new.exists():
+        webp_old.rename(webp_new)
+    # Rename matching .lrc sidecar too
+    lrc_old = MUSIC_DIR / (old_path.stem + ".lrc")
+    lrc_new = MUSIC_DIR / (new_path.stem + ".lrc")
+    if lrc_old.exists() and not lrc_new.exists():
+        lrc_old.rename(lrc_new)
+    return jsonify({"ok": True, "new_name": new_path.name}), 200
+
+
+# ──────────────────────────────────────────────────────────────────
 #  RENAME ARTIST — bulk rename all tracks by a given artist name
 # ──────────────────────────────────────────────────────────────────
 
@@ -3456,7 +3705,10 @@ def music_rename_artist():
 @app.route("/api/music/cover", methods=["POST"])
 @jwt_required()
 def music_set_cover():
-    """Upload a custom cover image for a track (saves as .webp sidecar)."""
+    """Upload a custom cover image for a track (saves as .webp sidecar).
+    Accepts JPG, PNG, WEBP, GIF, BMP — converts everything to WEBP on disk.
+    Uses in-memory encode + raw byte write to avoid libwebp path-encoding bugs.
+    """
     track_name = request.form.get("track_name", "").strip()
     file = request.files.get("file")
     if not track_name or not file:
@@ -3467,14 +3719,55 @@ def music_set_cover():
     webp_path = MUSIC_DIR / (base + ".webp")
 
     try:
-        img = Image.open(io.BytesIO(file.read()))
-        img = img.convert("RGB")
-        img.thumbnail((600, 600), Image.Resampling.LANCZOS)
-        img.save(str(webp_path), "WEBP", quality=88)
+        raw_bytes = file.read()
+        if not raw_bytes:
+            return jsonify({"error": "Uploaded file is empty"}), 400
+
+        img = Image.open(io.BytesIO(raw_bytes))
+
+        # Auto-correct EXIF rotation (common with phone photos)
+        try:
+            from PIL import ImageOps
+            img = ImageOps.exif_transpose(img)
+        except Exception:
+            pass
+
+        # Normalise colour mode — WEBP encoder needs RGB or RGBA
+        if img.mode == "P":
+            img = img.convert("RGBA")
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGB")
+
+        # Resize to max 800×800 (preserving aspect ratio)
+        img.thumbnail((800, 800), Image.Resampling.LANCZOS)
+
+        # ── Encode in-memory first ────────────────────────────────────────
+        # Calling img.save(filepath, "WEBP") can fail on certain libwebp builds
+        # because the C encoder is invoked differently for file paths vs streams.
+        # Encoding to BytesIO then writing the bytes manually is always reliable.
+        buf = io.BytesIO()
+        save_kw = {"format": "WEBP", "quality": 88, "method": 4}
+        if img.mode == "RGBA":
+            save_kw["lossless"] = False   # keep transparency but as lossy WEBP
+        img.save(buf, **save_kw)
+        webp_data = buf.getvalue()
+
+        if not webp_data:
+            return jsonify({"error": "WEBP encoder returned empty output — try a different image"}), 500
+
+        # Write bytes directly to disk
+        webp_path.write_bytes(webp_data)
+
         return jsonify({"ok": True, "file": base + ".webp"}), 200
+
     except Exception as e:
-        logger.error(f"cover art error: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"cover art error for '{track_name}': {e}", exc_info=True)
+        msg = str(e)
+        if "cannot identify" in msg:
+            msg = "Cannot read image — upload a valid JPG, PNG or WEBP file."
+        elif "encoder" in msg.lower() or "webp" in msg.lower():
+            msg = f"WEBP encoding failed ({msg}). Try converting the file to JPG first."
+        return jsonify({"error": msg}), 500
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -3600,14 +3893,206 @@ def music_admin_delete():
     return jsonify({"msg": "Deleted"}), 200
 
 
+# ──────────────────────────────────────────────────────────────────
+#  ARTIST NAME DETECTION — match known artist names inside song titles
+#  Handles label-channel downloads where filename = "NA - <YouTube title>"
+# ──────────────────────────────────────────────────────────────────
+
+# Curated artist database — canonical name → list of aliases / common spellings
+# Sorted longest-first at runtime so "Yo Yo Honey Singh" beats "Honey Singh"
+_ARTIST_DB = {
+    # ── Bollywood / Hindi ─────────────────────────────────────────
+    "Arijit Singh":           ["arijit singh", "arijit"],
+    "Atif Aslam":             ["atif aslam", "atif"],
+    "Shreya Ghoshal":         ["shreya ghoshal", "shreya"],
+    "Sonu Nigam":             ["sonu nigam"],
+    "Kumar Sanu":             ["kumar sanu"],
+    "Udit Narayan":           ["udit narayan"],
+    "Alka Yagnik":            ["alka yagnik"],
+    "Lata Mangeshkar":        ["lata mangeshkar", "lata"],
+    "Asha Bhosle":            ["asha bhosle", "asha bhonsle"],
+    "Mohammed Rafi":          ["mohammed rafi", "md rafi", "mohammad rafi"],
+    "Kishore Kumar":          ["kishore kumar", "kishore"],
+    "A. R. Rahman":           ["a r rahman", "ar rahman", "a.r. rahman", "a.r rahman", "rahman"],
+    "Pritam":                 ["pritam"],
+    "Vishal-Shekhar":         ["vishal shekhar", "vishal-shekhar"],
+    "Shankar-Ehsaan-Loy":     ["shankar ehsaan loy", "shankar-ehsaan-loy"],
+    "Amit Trivedi":           ["amit trivedi"],
+    "Shaan":                  ["shaan"],
+    "KK":                     ["kk", "k.k."],
+    "Sunidhi Chauhan":        ["sunidhi chauhan", "sunidhi"],
+    "Neha Kakkar":            ["neha kakkar"],
+    "Tony Kakkar":            ["tony kakkar"],
+    "Darshan Raval":          ["darshan raval"],
+    "B Praak":                ["b praak", "b. praak"],
+    "Jubin Nautiyal":         ["jubin nautiyal", "jubin"],
+    "Armaan Malik":           ["armaan malik"],
+    "Ankit Tiwari":           ["ankit tiwari"],
+    "Palak Muchhal":          ["palak muchhal"],
+    "Tulsi Kumar":            ["tulsi kumar"],
+    "Asees Kaur":             ["asees kaur"],
+    "Harshdeep Kaur":         ["harshdeep kaur"],
+    "Monali Thakur":          ["monali thakur"],
+    "Usha Uthup":             ["usha uthup"],
+    "Mika Singh":             ["mika singh", "mika"],
+    "Badshah":                ["badshah"],
+    "Honey Singh":            ["honey singh"],
+    "Yo Yo Honey Singh":      ["yo yo honey singh", "yoyo honey singh"],
+    "Raftaar":                ["raftaar"],
+    "Divine":                 ["divine"],
+    "Nucleya":                ["nucleya"],
+    "Raja Kumari":            ["raja kumari"],
+    "Dino James":             ["dino james"],
+    "Emiway Bantai":          ["emiway bantai", "emiway"],
+    "Naezy":                  ["naezy"],
+    "MC Stan":                ["mc stan"],
+    "Krsna":                  ["krsna"],
+    "Ikka":                   ["ikka"],
+    "Bohemia":                ["bohemia"],
+    "Imran Khan":             ["imran khan"],
+    # ── Punjabi ────────────────────────────────────────────────────
+    "Diljit Dosanjh":         ["diljit dosanjh", "diljit"],
+    "Sidhu Moosewala":        ["sidhu moosewala", "moosewala"],
+    "AP Dhillon":             ["ap dhillon"],
+    "Gurinder Gill":          ["gurinder gill"],
+    "Hardy Sandhu":           ["hardy sandhu"],
+    "Jasmine Sandlas":        ["jasmine sandlas"],
+    "Harrdy Sandhu":          ["harrdy sandhu"],
+    "Ammy Virk":              ["ammy virk"],
+    "Kulwinder Billa":        ["kulwinder billa"],
+    "Prabh Gill":             ["prabh gill"],
+    "Jassie Gill":            ["jassie gill"],
+    "Mankirt Aulakh":         ["mankirt aulakh"],
+    "Garry Sandhu":           ["garry sandhu"],
+    "Jordan Sandhu":          ["jordan sandhu"],
+    "R Nait":                 ["r nait"],
+    "Karan Aujla":            ["karan aujla"],
+    "Deep Jandu":             ["deep jandu"],
+    "Sukh-E":                 ["sukh e", "sukh-e", "sukhe"],
+    "Sharry Maan":            ["sharry maan"],
+    "Ninja":                  ["ninja"],
+    "Satinder Sartaaj":       ["satinder sartaaj", "satinder sartaj"],
+    "Surjit Bindrakhia":      ["surjit bindrakhia"],
+    "Hans Raj Hans":          ["hans raj hans"],
+    "Labh Janjua":            ["labh janjua"],
+    "Miss Pooja":             ["miss pooja"],
+    "Gippy Grewal":           ["gippy grewal"],
+    "Kaur B":                 ["kaur b"],
+    "Sunanda Sharma":         ["sunanda sharma"],
+    # ── Aditya Rikhari & similar indie ────────────────────────────
+    "Aditya Rikhari":         ["aditya rikhari"],
+    "Prateek Kuhad":          ["prateek kuhad"],
+    "Ritviz":                 ["ritviz"],
+    "Ankur Tewari":           ["ankur tewari"],
+    "The Local Train":        ["the local train"],
+    "When Chai Met Toast":    ["when chai met toast"],
+    "Papon":                  ["papon"],
+    "Mohit Chauhan":          ["mohit chauhan"],
+    "Lucky Ali":              ["lucky ali"],
+    "Silk Route":             ["silk route"],
+    "Indian Ocean":           ["indian ocean"],
+    "Strings":                ["strings"],
+    "Junoon":                 ["junoon"],
+    "Rabbi Shergill":         ["rabbi shergill", "rabbi"],
+    "Farida Khanum":          ["farida khanum"],
+    "Nusrat Fateh Ali Khan":  ["nusrat fateh ali khan", "nusrat"],
+    "Rahat Fateh Ali Khan":   ["rahat fateh ali khan", "rahat"],
+    "Abida Parveen":          ["abida parveen"],
+    "Kaifi Khalil":           ["kaifi khalil"],
+    "Talha Anjum":            ["talha anjum"],
+    "Talha Yunus":            ["talha yunus"],
+    "Wahab Bugti":            ["wahab bugti"],
+    "Coke Studio":            ["coke studio"],
+    # ── Tamil / Telugu / South Indian ────────────────────────────
+    "Sid Sriram":             ["sid sriram"],
+    "Anirudh Ravichander":    ["anirudh ravichander", "anirudh"],
+    "Yuvan Shankar Raja":     ["yuvan shankar raja", "yuvan"],
+    "Harris Jayaraj":         ["harris jayaraj", "harris"],
+    "D. Imman":               ["d imman", "d. imman", "imman"],
+    "G. V. Prakash Kumar":    ["gv prakash kumar", "gv prakash", "g v prakash"],
+    "S. P. Balasubrahmanyam": ["sp balasubrahmanyam", "sp balasubramanyam", "spb"],
+    "K. J. Yesudas":          ["kj yesudas", "k j yesudas", "yesudas"],
+    "Shankar Mahadevan":      ["shankar mahadevan"],
+    "Udit Narayan":           ["udit narayan"],
+    "Devi Sri Prasad":        ["devi sri prasad", "dsp"],
+    "M. M. Keeravani":        ["mm keeravani", "m m keeravani", "keeravani"],
+    "Thaman S":               ["thaman s", "s thaman"],
+    "Vijay Antony":           ["vijay antony"],
+    "D. Imman":               ["d imman"],
+    "Haricharan":             ["haricharan"],
+    "Divakar":                ["divakar"],
+    # ── International / Pop / Hip-hop ─────────────────────────────
+    "Drake":                  ["drake"],
+    "Eminem":                 ["eminem"],
+    "Kanye West":             ["kanye west", "ye"],
+    "Jay-Z":                  ["jay z", "jay-z"],
+    "Kendrick Lamar":         ["kendrick lamar", "kendrick"],
+    "Travis Scott":           ["travis scott"],
+    "Post Malone":            ["post malone"],
+    "21 Savage":              ["21 savage"],
+    "Lil Wayne":              ["lil wayne"],
+    "Nicki Minaj":            ["nicki minaj"],
+    "Cardi B":                ["cardi b"],
+    "Megan Thee Stallion":    ["megan thee stallion"],
+    "Taylor Swift":           ["taylor swift"],
+    "Ed Sheeran":             ["ed sheeran"],
+    "The Weeknd":             ["the weeknd"],
+    "Billie Eilish":          ["billie eilish"],
+    "Ariana Grande":          ["ariana grande"],
+    "Dua Lipa":               ["dua lipa"],
+    "Bad Bunny":              ["bad bunny"],
+    "J Balvin":               ["j balvin"],
+    "Ozuna":                  ["ozuna"],
+    "Daddy Yankee":           ["daddy yankee"],
+    "Sia":                    ["sia"],
+    "Rihanna":                ["rihanna"],
+    "Beyoncé":                ["beyonce", "beyoncé"],
+    "Bruno Mars":             ["bruno mars"],
+    "Harry Styles":           ["harry styles"],
+    "Coldplay":               ["coldplay"],
+    "Imagine Dragons":        ["imagine dragons"],
+    "Linkin Park":            ["linkin park"],
+    "BTS":                    ["bts"],
+    "BLACKPINK":              ["blackpink"],
+}
+
+# Build sorted alias list at import time (longest alias first to avoid partial matches)
+_ARTIST_ALIASES: list[tuple[str, str]] = sorted(
+    [(alias, canonical) for canonical, aliases in _ARTIST_DB.items() for alias in aliases],
+    key=lambda x: len(x[0]),
+    reverse=True,
+)
+
+
+def _detect_artist_in_title(title: str) -> str | None:
+    """
+    Scan a song title for known artist names (case-insensitive, word-boundary aware).
+    Returns the canonical artist name if found, else None.
+    """
+    if not title:
+        return None
+    title_lc = title.lower()
+    # Remove common separators so "feat." / "ft." don't block detection
+    clean = re.sub(r'\b(feat\.?|ft\.?|featuring|prod\.? by|x|vs\.?)\b', ' ', title_lc, flags=re.IGNORECASE)
+    for alias, canonical in _ARTIST_ALIASES:
+        # Word-boundary match: alias must be surrounded by non-word chars or string edges
+        pattern = r'(?<![a-z0-9])' + re.escape(alias) + r'(?![a-z0-9])'
+        if re.search(pattern, clean, re.IGNORECASE):
+            return canonical
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────
+#  ADMIN: FIX ARTIST NAMES — smart version with artist detection
+# ──────────────────────────────────────────────────────────────────
+
 @app.route("/api/music/admin/fix_artist_names", methods=["POST"])
 @jwt_required()
 def music_admin_fix_artist_names():
     """
     Admin-only: scan all tracks and rename files where artist is 'NA', 'N/A',
-    or empty — replacing with the uploader/channel name embedded in the file
-    or a user-supplied default.  Runs synchronously (small library) or in
-    background for large ones.
+    or empty — first tries to detect artist from title using known artist database,
+    then falls back to user-supplied default.
     """
     if not _require_admin():
         return jsonify({"error": "Admin only"}), 403
@@ -3634,8 +4119,9 @@ def music_admin_fix_artist_names():
             title_part  = stem
             artist_part = ''
 
-        # Use default_artist if provided, else keep "Unknown Artist"
-        new_artist = default_artist or "Unknown Artist"
+        # Try to detect artist from title using known-artist database
+        detected = _detect_artist_in_title(title_part)
+        new_artist = detected or default_artist or "Unknown Artist"
         new_stem   = re.sub(r'[/\\:*?"<>|]', '_', f"{new_artist} - {title_part}").strip()
         new_path   = MUSIC_DIR / (new_stem + f.suffix)
 
@@ -3644,7 +4130,7 @@ def music_admin_fix_artist_names():
             continue
         try:
             f.rename(new_path)
-            renamed.append({"old": f.name, "new": new_path.name})
+            renamed.append({"old": f.name, "new": new_path.name, "detected": bool(detected)})
             # Rename .webp sidecar
             webp_old = MUSIC_DIR / (stem + ".webp")
             webp_new = MUSIC_DIR / (new_stem + ".webp")
@@ -3654,6 +4140,18 @@ def music_admin_fix_artist_names():
             errors.append(f"{f.name}: {ex}")
 
     return jsonify({"renamed": renamed, "errors": errors, "count": len(renamed)}), 200
+
+
+@app.route("/api/music/detect_artist", methods=["POST"])
+@jwt_required()
+def music_detect_artist():
+    """Detect artist name in a song title using the known-artist database."""
+    data  = request.get_json() or {}
+    title = data.get("title", "").strip()
+    if not title:
+        return jsonify({"artist": None}), 200
+    artist = _detect_artist_in_title(title)
+    return jsonify({"artist": artist}), 200
 
 
 if __name__ == "__main__":
@@ -3684,4 +4182,29 @@ if __name__ == "__main__":
 
     debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
     port       = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=debug_mode)
+
+    # ── HTTPS / SSL ──────────────────────────────────────────────────────
+    # Place cert.pem + key.pem next to main.py for production HTTPS.
+    # If missing, tries pyOpenSSL adhoc cert (install: pip install pyopenssl).
+    # Falls back to plain HTTP if neither is available.
+    cert_path = BASE_DIR / "cert.pem"
+    key_path  = BASE_DIR / "key.pem"
+
+    if cert_path.exists() and key_path.exists():
+        ssl_ctx = (str(cert_path), str(key_path))
+        print(f"🔒  HTTPS enabled  — using {cert_path.name} + {key_path.name}")
+        print(f"    https://0.0.0.0:{port}/\n")
+    else:
+        try:
+            import OpenSSL  # noqa: F401
+            ssl_ctx = "adhoc"
+            print("🔒  HTTPS enabled  — using pyOpenSSL adhoc self-signed cert")
+            print(f"    https://0.0.0.0:{port}/")
+            print("    (Browser will show security warning — click 'Proceed anyway')\n")
+        except ImportError:
+            ssl_ctx = None
+            print("⚠️   HTTPS disabled — install pyOpenSSL for auto HTTPS:")
+            print("    pip install pyopenssl")
+            print(f"    http://0.0.0.0:{port}/\n")
+
+    app.run(host="0.0.0.0", port=port, debug=debug_mode, ssl_context=ssl_ctx)
