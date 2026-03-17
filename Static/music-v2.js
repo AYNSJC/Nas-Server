@@ -1002,10 +1002,12 @@ function mp2PlayActivePlaylist() {
   mp2PlayTrack(pl.tracks[0], 'playlist:' + mp2.activePl);
 }
 
-function mp2DeleteActivePl() {
+async function mp2DeleteActivePl() {
   if (!mp2.activePl) return;
   const pl = mp2.playlists.find(p => p.id === mp2.activePl);
-  if (!pl || !confirm(`Delete playlist "${pl.name}"?`)) return;
+  if (!pl) return;
+  const ok = await mp2Confirm({ icon: '🗑️', title: `Delete "${pl.name}"?`, msg: 'This cannot be undone.', okLabel: 'Delete', danger: true });
+  if (!ok) return;
   mp2.playlists = mp2.playlists.filter(p => p.id !== mp2.activePl);
   mp2.activePl = null;
   mp2SavePrefs();
@@ -1270,7 +1272,57 @@ function mp2Load(trackName) {
   mp2RefreshTrackHighlights();
   // Fetch lyrics for CD modal
   if (window.mpFetchLyrics) mpFetchLyrics(trackName);
+  // Update lock screen / notification media session
+  mp2UpdateMediaSession(trackName);
 }
+
+// ── MEDIA SESSION (lock screen + swipe-down notification) ──────────────
+function mp2UpdateMediaSession(trackName) {
+  if (!('mediaSession' in navigator)) return;
+  const title  = mp2GuessTitle(trackName);
+  const artist = mp2GuessArtist(trackName) || 'Unknown Artist';
+
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title,
+    artist,
+    album: 'Resonance',
+    artwork: [] // filled in async below
+  });
+
+  // Handlers for lock screen / notification controls
+  navigator.mediaSession.setActionHandler('play',         () => { mpAudio2.play(); });
+  navigator.mediaSession.setActionHandler('pause',        () => { mpAudio2.pause(); });
+  navigator.mediaSession.setActionHandler('previoustrack',() => { mp2Prev(); });
+  navigator.mediaSession.setActionHandler('nexttrack',    () => { mp2Next(); });
+  navigator.mediaSession.setActionHandler('seekbackward', (d) => { mpAudio2.currentTime = Math.max(0, mpAudio2.currentTime - (d.seekOffset || 10)); });
+  navigator.mediaSession.setActionHandler('seekforward',  (d) => { mpAudio2.currentTime = Math.min(mpAudio2.duration || Infinity, mpAudio2.currentTime + (d.seekOffset || 10)); });
+
+  // Load artwork async and update metadata once we have a URL
+  mp2GetArt(trackName).then(artUrl => {
+    if (!artUrl) return;
+    // Use full absolute URL for MediaMetadata artwork
+    const abs = artUrl.startsWith('http') ? artUrl : (window.location.origin + artUrl);
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title,
+      artist,
+      album: 'Resonance',
+      artwork: [
+        { src: abs, sizes: '512x512', type: 'image/jpeg' },
+        { src: abs, sizes: '256x256', type: 'image/jpeg' },
+        { src: abs, sizes: '96x96',   type: 'image/jpeg' },
+      ]
+    });
+  });
+}
+
+// Keep media session playback state in sync
+mpAudio2.addEventListener('play',  () => {
+  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+});
+mpAudio2.addEventListener('pause', () => {
+  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+});
+
 
 function mp2Next() {
   if (!mp2.queue.length) return;
@@ -1563,8 +1615,8 @@ function mp2UpdateCDInfo() {
 }
 
 // ── PLAYLIST MANAGEMENT ───────────────────────────────────────────────
-function mp2CreatePlaylist() {
-  const name = prompt('Playlist name:');
+async function mp2CreatePlaylist() {
+  const name = await mp2Prompt({ icon: '🎵', title: 'New Playlist', placeholder: 'Playlist name…', okLabel: 'Create' });
   if (!name || !name.trim()) return;
   const pl = { id: 'pl_' + Date.now(), name: name.trim(), tracks: [] };
   mp2.playlists.push(pl);
@@ -1700,7 +1752,8 @@ function mp2AddToPlFromCtx(plId, trackName) {
 }
 
 async function mp2DeleteTrack(trackName) {
-  if (!confirm(`Delete "${mp2GuessTitle(trackName)}"?`)) return;
+  const ok = await mp2Confirm({ icon: '🗑️', title: 'Delete track?', msg: `"${mp2GuessTitle(trackName)}" will be permanently removed.`, okLabel: 'Delete', danger: true });
+  if (!ok) return;
   try {
     const res = await fetch('/api/music/delete', {
       method: 'POST',
@@ -2172,6 +2225,174 @@ async function mp2UploadFiles(input) {
   input.value = '';
 }
 
+// ══════════════════════════════════════════════════════════════════
+//  CUSTOM MODAL SYSTEM — replaces all browser prompt() / confirm()
+// ══════════════════════════════════════════════════════════════════
+
+// Inject modal CSS once
+(function _mp2InjectModalCSS() {
+  if (document.getElementById('mp2ModalStyle')) return;
+  const s = document.createElement('style');
+  s.id = 'mp2ModalStyle';
+  s.textContent = `
+  .mp2-modal-overlay {
+    position: fixed; inset: 0; z-index: 19999;
+    background: rgba(0,0,0,0.72);
+    backdrop-filter: blur(8px);
+    display: flex; align-items: center; justify-content: center;
+    animation: mp2MoFadeIn .18s ease;
+  }
+  @keyframes mp2MoFadeIn { from { opacity:0 } to { opacity:1 } }
+  .mp2-modal-box {
+    background: #13141f;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 18px;
+    padding: 28px 28px 22px;
+    width: 360px; max-width: 92vw;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.8);
+    animation: mp2MoSlideIn .2s cubic-bezier(.34,1.56,.64,1);
+  }
+  @keyframes mp2MoSlideIn { from { transform: scale(.92) translateY(12px); opacity:0 } to { transform: none; opacity:1 } }
+  .mp2-modal-icon { font-size: 28px; margin-bottom: 10px; }
+  .mp2-modal-title {
+    font-family: 'Outfit', sans-serif;
+    font-size: 17px; font-weight: 700;
+    color: #f1f0ff; margin-bottom: 6px;
+  }
+  .mp2-modal-msg {
+    font-size: 13.5px; color: #a09dc0;
+    line-height: 1.55; margin-bottom: 18px;
+  }
+  .mp2-modal-input {
+    width: 100%; box-sizing: border-box;
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.13);
+    border-radius: 10px;
+    color: #f1f0ff; font-family: 'Figtree', sans-serif;
+    font-size: 14px; padding: 10px 14px;
+    outline: none; margin-bottom: 18px;
+    transition: border-color .15s;
+  }
+  .mp2-modal-input:focus { border-color: #7c3aed; }
+  .mp2-modal-btns { display: flex; gap: 10px; justify-content: flex-end; }
+  .mp2-modal-btn {
+    padding: 9px 20px; border-radius: 10px; border: none;
+    font-family: 'Figtree', sans-serif;
+    font-size: 13.5px; font-weight: 600; cursor: pointer;
+    transition: all .15s;
+  }
+  .mp2-modal-btn-cancel {
+    background: rgba(255,255,255,0.08);
+    color: #a09dc0;
+  }
+  .mp2-modal-btn-cancel:hover { background: rgba(255,255,255,0.14); color: #f1f0ff; }
+  .mp2-modal-btn-ok {
+    background: #7c3aed; color: #fff;
+    box-shadow: 0 4px 14px rgba(124,58,237,.4);
+  }
+  .mp2-modal-btn-ok:hover { background: #8b47f5; }
+  .mp2-modal-btn-danger {
+    background: #ef4444; color: #fff;
+    box-shadow: 0 4px 14px rgba(239,68,68,.3);
+  }
+  .mp2-modal-btn-danger:hover { background: #f87171; }
+  `;
+  document.head.appendChild(s);
+})();
+
+/**
+ * mp2Confirm(opts) → Promise<boolean>
+ * opts: { title, msg, icon, okLabel, cancelLabel, danger }
+ */
+function mp2Confirm(opts = {}) {
+  return new Promise(resolve => {
+    _mp2InjectModalCSS && _mp2InjectModalCSS();
+    const overlay = document.createElement('div');
+    overlay.className = 'mp2-modal-overlay';
+    overlay.innerHTML = `
+      <div class="mp2-modal-box">
+        ${opts.icon ? `<div class="mp2-modal-icon">${opts.icon}</div>` : ''}
+        <div class="mp2-modal-title">${opts.title || 'Are you sure?'}</div>
+        ${opts.msg ? `<div class="mp2-modal-msg">${opts.msg}</div>` : ''}
+        <div class="mp2-modal-btns">
+          <button class="mp2-modal-btn mp2-modal-btn-cancel">${opts.cancelLabel || 'Cancel'}</button>
+          <button class="mp2-modal-btn ${opts.danger ? 'mp2-modal-btn-danger' : 'mp2-modal-btn-ok'}">${opts.okLabel || 'OK'}</button>
+        </div>
+      </div>`;
+    const [cancelBtn, okBtn] = overlay.querySelectorAll('.mp2-modal-btn');
+    const done = (val) => { overlay.remove(); resolve(val); };
+    cancelBtn.onclick = () => done(false);
+    okBtn.onclick     = () => done(true);
+    overlay.addEventListener('keydown', e => { if (e.key === 'Escape') done(false); if (e.key === 'Enter') done(true); });
+    document.body.appendChild(overlay);
+    okBtn.focus();
+  });
+}
+
+/**
+ * mp2Prompt(opts) → Promise<string|null>
+ * opts: { title, msg, icon, placeholder, defaultValue, okLabel, cancelLabel }
+ */
+function mp2Prompt(opts = {}) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'mp2-modal-overlay';
+    overlay.innerHTML = `
+      <div class="mp2-modal-box">
+        ${opts.icon ? `<div class="mp2-modal-icon">${opts.icon}</div>` : ''}
+        <div class="mp2-modal-title">${opts.title || 'Enter value'}</div>
+        ${opts.msg ? `<div class="mp2-modal-msg">${opts.msg}</div>` : ''}
+        <input class="mp2-modal-input" type="text"
+          placeholder="${opts.placeholder || ''}"
+          value="${escapeHtml(opts.defaultValue || '')}">
+        <div class="mp2-modal-btns">
+          <button class="mp2-modal-btn mp2-modal-btn-cancel">${opts.cancelLabel || 'Cancel'}</button>
+          <button class="mp2-modal-btn mp2-modal-btn-ok">${opts.okLabel || 'OK'}</button>
+        </div>
+      </div>`;
+    const input     = overlay.querySelector('.mp2-modal-input');
+    const cancelBtn = overlay.querySelector('.mp2-modal-btn-cancel');
+    const okBtn     = overlay.querySelector('.mp2-modal-btn-ok');
+    const done = (val) => { overlay.remove(); resolve(val); };
+    cancelBtn.onclick = () => done(null);
+    okBtn.onclick     = () => done(input.value);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') done(input.value); if (e.key === 'Escape') done(null); });
+    document.body.appendChild(overlay);
+    input.focus();
+    input.select();
+  });
+}
+
+/**
+ * mp2PromptChoose(opts) → Promise<'ok'|'manual'|null>
+ * Three-option modal: primary action, secondary action, cancel
+ */
+function mp2PromptChoose(opts = {}) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'mp2-modal-overlay';
+    overlay.innerHTML = `
+      <div class="mp2-modal-box">
+        ${opts.icon ? `<div class="mp2-modal-icon">${opts.icon}</div>` : ''}
+        <div class="mp2-modal-title">${opts.title || ''}</div>
+        ${opts.msg ? `<div class="mp2-modal-msg">${opts.msg}</div>` : ''}
+        <div class="mp2-modal-btns" style="flex-direction:column;gap:8px;">
+          <button class="mp2-modal-btn mp2-modal-btn-ok" style="width:100%;text-align:center;">${opts.okLabel || 'Use this'}</button>
+          <button class="mp2-modal-btn mp2-modal-btn-cancel" style="width:100%;text-align:center;">${opts.manualLabel || 'Enter manually'}</button>
+          <button class="mp2-modal-btn mp2-modal-btn-cancel" style="width:100%;text-align:center;opacity:.6;">${opts.cancelLabel || 'Skip'}</button>
+        </div>
+      </div>`;
+    const [okBtn, manualBtn, cancelBtn] = overlay.querySelectorAll('.mp2-modal-btn');
+    const done = (val) => { overlay.remove(); resolve(val); };
+    okBtn.onclick     = () => done('ok');
+    manualBtn.onclick = () => done('manual');
+    cancelBtn.onclick = () => done(null);
+    overlay.addEventListener('keydown', e => { if (e.key === 'Escape') done(null); });
+    document.body.appendChild(overlay);
+    okBtn.focus();
+  });
+}
+
 // ── OVERRIDE OLD HOOKS ────────────────────────────────────────────────
 // Keep old functions working for compatibility
 window.mpTogglePlay = mp2TogglePlay;
@@ -2285,11 +2506,14 @@ function mp2ToggleLyricsPanel() {
   if (isOpen) {
     const track = mp2.currentTrack || mp2Lyrics._pendingTrack;
     if (track) {
-      // Always re-fetch for the current track (force re-fetch if different track)
       if (mp2Lyrics.loadedFor !== track) {
+        // Not yet loaded at all — fetch now
         mp2FetchLyrics(track);
+      } else if (mp2Lyrics._preloaded) {
+        // Was background-fetched — render it to DOM now
+        mp2RenderPreloadedLyrics();
       } else {
-        // Already loaded, just start sync if synced
+        // Loaded and rendered already — restart sync if needed
         if (mp2Lyrics.synced && !mpAudio2.paused) mp2StartLyricSync();
       }
     }
@@ -2298,7 +2522,58 @@ function mp2ToggleLyricsPanel() {
   }
 }
 
-// Background pre-fetch (doesn't update DOM unless panel is open)
+// Render lyrics data that was already fetched in background
+function mp2RenderPreloadedLyrics() {
+  const content = document.getElementById('mpLyricsContent');
+  if (!content) return;
+
+  // If nothing was actually fetched, fall back to a fresh fetch
+  if (!mp2Lyrics.plain && !(mp2Lyrics.lines && mp2Lyrics.lines.length)) {
+    const track = mp2.currentTrack || mp2Lyrics._pendingTrack;
+    if (track) mp2FetchLyrics(track);
+    return;
+  }
+
+  const title    = mp2Lyrics._cachedTitle  || mp2GuessTitle(mp2.currentTrack || '');
+  const artist   = mp2Lyrics._cachedArtist || mp2GuessArtist(mp2.currentTrack || '') || '';
+
+  const header = `<div class="mp-lyrics-meta" style="padding:16px 16px 8px;border-bottom:1px solid var(--mp2-border);margin-bottom:4px;">
+    <div style="font-weight:700;font-size:14px;color:var(--mp2-text);">${escapeHtml(title)}</div>
+    ${artist ? `<div style="font-size:12px;color:var(--mp2-text3);margin-top:2px;">${escapeHtml(artist)}</div>` : ''}
+    <div style="margin-top:6px;">
+      ${mp2Lyrics.synced
+        ? '<span style="font-size:10px;background:rgba(124,58,237,0.2);color:var(--mp2-accent2);padding:2px 8px;border-radius:10px;font-weight:600;letter-spacing:.5px;">🎵 SYNCED</span>'
+        : '<span style="font-size:10px;background:rgba(255,255,255,0.06);color:var(--mp2-text3);padding:2px 8px;border-radius:10px;">PLAIN TEXT</span>'}
+    </div>
+  </div>`;
+
+  if (mp2Lyrics.synced && mp2Lyrics.lines && mp2Lyrics.lines.length > 0) {
+    const linesHtml = mp2Lyrics.lines.map((l, i) =>
+      `<div class="mp-lyric-line" id="mpl${i}" data-ms="${l.time_ms}"
+            onclick="mpAudio2.currentTime=${l.time_ms / 1000}">${escapeHtml(l.text)}</div>`
+    ).join('');
+    content.innerHTML = header + `<div class="mp-lyric-lines" id="mpLyricLines" style="padding:8px 0;">${linesHtml}</div>`;
+    const badge = document.getElementById('mp2LyricsSyncBadge');
+    if (badge) badge.style.display = 'inline';
+    const badge2 = document.getElementById('mp2LyricsSyncBadge2');
+    if (badge2) badge2.style.display = 'inline';
+    if (!mpAudio2.paused) mp2StartLyricSync();
+  } else if (mp2Lyrics.plain) {
+    const plainHtml = mp2Lyrics.plain.split('\n').map(l =>
+      l.trim()
+        ? `<div class="mp-lyric-line-plain">${escapeHtml(l)}</div>`
+        : `<div style="height:12px;"></div>`
+    ).join('');
+    content.innerHTML = header + `<div class="mp-lyric-plain" style="padding:8px 0;">${plainHtml}</div>`;
+  } else {
+    // Preloaded but empty — do a fresh fetch
+    const track = mp2.currentTrack || mp2Lyrics._pendingTrack;
+    if (track) mp2FetchLyrics(track);
+  }
+  mp2Lyrics._preloaded = false; // mark as fully rendered
+}
+
+
 async function mp2FetchLyricsBackground(filename) {
   if (!filename) return;
   const stem   = filename.replace(/\.(mp3|flac|wav|ogg|m4a|aac|opus|wma|webm)$/i, '');
@@ -2319,11 +2594,13 @@ async function mp2FetchLyricsBackground(filename) {
       const res = await fetch('/api/music/lyrics?' + params, { headers: { Authorization: 'Bearer ' + (token || localStorage.getItem('token') || '') } });
       const data = await res.json();
       if (data && data.found) {
-        mp2Lyrics.loadedFor = filename;
-        mp2Lyrics.synced = data.synced || false;
-        mp2Lyrics.lines  = data.lines  || [];
-        mp2Lyrics.plain  = data.lyrics || '';
-        mp2Lyrics._preloaded = true;
+        mp2Lyrics.loadedFor    = filename;
+        mp2Lyrics.synced       = data.synced || false;
+        mp2Lyrics.lines        = data.lines  || [];
+        mp2Lyrics.plain        = data.lyrics || '';
+        mp2Lyrics._preloaded   = true;
+        mp2Lyrics._cachedTitle  = data.title  || title;
+        mp2Lyrics._cachedArtist = data.artist || artist;
         break;
       }
     }
@@ -2596,7 +2873,7 @@ function mp2AdminFilterFiles() {
 }
 
 async function mp2AdminRenameFile(oldName) {
-  const newName = prompt(`Rename "${oldName}" to:`, oldName);
+  const newName = await mp2Prompt({ icon: '✏️', title: 'Rename file', msg: `Current: <code style="background:rgba(255,255,255,.07);padding:1px 6px;border-radius:4px;font-size:12px;">${escapeHtml(oldName)}</code>`, placeholder: 'New filename…', defaultValue: oldName, okLabel: 'Rename' });
   if (!newName || newName === oldName) return;
   try {
     const res = await fetch('/api/music/admin/rename', {
@@ -2614,7 +2891,8 @@ async function mp2AdminRenameFile(oldName) {
 }
 
 async function mp2AdminDeleteFile(filename) {
-  if (!confirm(`Delete "${filename}"?\n\nThis cannot be undone.`)) return;
+  const ok = await mp2Confirm({ icon: '🗑️', title: 'Delete file?', msg: `<code style="background:rgba(255,255,255,.07);padding:1px 6px;border-radius:4px;font-size:12px;">${escapeHtml(filename)}</code><br><br>This cannot be undone.`, okLabel: 'Delete', danger: true });
+  if (!ok) return;
   try {
     const res = await fetch('/api/music/admin/delete', {
       method: 'DELETE',
@@ -2631,7 +2909,7 @@ async function mp2AdminDeleteFile(filename) {
 }
 
 async function mp2AdminFixNANames() {
-  const defaultArtist = prompt('Enter default artist name for unknown tracks (leave blank to use "Unknown Artist"):') ?? null;
+  const defaultArtist = await mp2Prompt({ icon: '🔧', title: 'Fix Unknown Artist Names', msg: 'Enter a fallback artist name for all unrecognised tracks, or leave blank to use "Unknown Artist".', placeholder: 'e.g. Unknown Artist', okLabel: 'Fix Names' });
   if (defaultArtist === null) return; // cancelled
   try {
     const res = await fetch('/api/music/admin/fix_artist_names', {
@@ -3009,15 +3287,29 @@ async function mp2AdminFindArtistForTrack(filename) {
 
   let chosenArtist;
   if (detected) {
-    const ok = confirm(
-      `Artist detected: ${detected}\n\nCurrent: "${currentArtist || '(none)'}"\nTitle:   "${titlePart}"\n\nRename to:\n"${detected} - ${titlePart}${ext}"?\n\nOK = yes   Cancel = enter manually`
-    );
-    chosenArtist = ok ? detected : prompt(`Enter artist name for:\n"${titlePart}"`, detected);
+    const choice = await mp2PromptChoose({
+      icon: '🎤',
+      title: 'Artist detected',
+      msg: `<b style="color:#f1f0ff">${escapeHtml(detected)}</b><br><span style="opacity:.6;font-size:12px;">for "${escapeHtml(titlePart)}"</span>`,
+      okLabel: `Use "${escapeHtml(detected)}"`,
+      manualLabel: 'Enter manually',
+      cancelLabel: 'Skip'
+    });
+    if (choice === null) { showToast('Skipped', 'info'); return; }
+    if (choice === 'ok') {
+      chosenArtist = detected;
+    } else {
+      chosenArtist = await mp2Prompt({ icon: '✏️', title: 'Enter artist name', msg: `Track: <span style="opacity:.7">"${escapeHtml(titlePart)}"</span>`, placeholder: 'Artist name…', defaultValue: detected, okLabel: 'Rename' });
+    }
   } else {
-    chosenArtist = prompt(
-      `No artist found automatically for:\n"${cleanTitle}"\n\nEnter artist name (or cancel to skip):`,
-      currentArtist || ''
-    );
+    chosenArtist = await mp2Prompt({
+      icon: '🔍',
+      title: 'No artist found',
+      msg: `Could not auto-detect an artist for:<br><span style="opacity:.7">"${escapeHtml(cleanTitle)}"</span>`,
+      placeholder: 'Artist name (or cancel to skip)…',
+      defaultValue: currentArtist || '',
+      okLabel: 'Rename'
+    });
   }
 
   if (!chosenArtist || !chosenArtist.trim()) { showToast('Skipped', 'info'); return; }
@@ -3045,17 +3337,25 @@ async function mp2AdminFindArtistForTrack(filename) {
 async function mp2AdminFindAllArtists() {
   if (!_mp2IsAdmin) { showToast('Admin only', 'error'); return; }
 
-  const all = confirm(
-    'Find artists via MusicBrainz for:\n\n' +
-    'OK     = ALL tracks (including ones that already have an artist)\n' +
-    'Cancel = Only tracks missing an artist (no " - " separator)'
-  );
+  const scope = await mp2PromptChoose({
+    icon: '🔎',
+    title: 'Find Artists via MusicBrainz',
+    msg: 'Which tracks should be searched?',
+    okLabel: 'All tracks',
+    manualLabel: 'Only tracks missing an artist',
+    cancelLabel: 'Cancel'
+  });
+  if (scope === null) return;
+  const all = (scope === 'ok');
 
-  const defaultArtist = prompt(
-    'Fallback artist name for any track where no artist is found\n(leave blank to skip unresolved tracks):',
-    ''
-  );
-  if (defaultArtist === null) return; // user hit Cancel on this prompt
+  const defaultArtist = await mp2Prompt({
+    icon: '🎤',
+    title: 'Fallback artist name',
+    msg: 'For any track where no artist is found. Leave blank to skip unresolved tracks.',
+    placeholder: 'e.g. Unknown Artist',
+    okLabel: 'Start search'
+  });
+  if (defaultArtist === null) return;
 
   showToast('🔎 Running artist search… this may take a while', 'info');
 

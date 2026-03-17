@@ -3802,6 +3802,50 @@ def music_is_admin():
     return jsonify({"is_admin": is_admin}), 200
 
 
+@app.route("/api/music/downloads", methods=["GET"])
+@jwt_required()
+def music_downloads_list():
+    """Return all current download jobs for the V3 Downloads tab."""
+    # Map _dl_status entries into the shape the UI expects:
+    # { id, title, artist, status, progress, url, addedAt, error }
+    # status values: 'active' | 'queue' | 'done' | 'fail'
+    result = []
+    for did, s in _dl_status.items():
+        raw_status = s.get("status", "downloading")
+        if raw_status == "done":
+            ui_status = "done"
+        elif raw_status == "error":
+            ui_status = "fail"
+        else:
+            ui_status = "active"
+
+        raw_name = s.get("filename") or s.get("name") or did
+        if " - " in raw_name:
+            parts = raw_name.split(" - ", 1)
+            artist = parts[0].strip()
+            title  = parts[1].strip()
+        else:
+            artist = ""
+            title  = raw_name.strip()
+
+        result.append({
+            "id":       did,
+            "title":    title,
+            "artist":   artist,
+            "status":   ui_status,
+            "progress": s.get("progress", 100 if raw_status == "done" else 0),
+            "url":      s.get("url", ""),
+            "thumb":    s.get("thumb", ""),
+            "addedAt":  s.get("added_at", ""),
+            "error":    s.get("error") or "",
+            "count":    s.get("count", 0),
+            "total":    s.get("total"),
+        })
+
+    result.reverse()  # most recent first
+    return jsonify({"downloads": result}), 200
+
+
 # ──────────────────────────────────────────────────────────────────
 #  TRACKS FOLDER MANAGER — admin only
 # ──────────────────────────────────────────────────────────────────
